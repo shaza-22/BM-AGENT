@@ -219,11 +219,38 @@ def canonical_key(url: str) -> str:
     return f"{host}{path}" + (f"?{query}" if query else "")
 
 
+def alias_key(url: str) -> str | None:
+    """The key this page would have under the site's *other* URL scheme.
+
+    Returns ``None`` when the URL carries no recognised scheme prefix, so a
+    caller can tell "no alias" from "aliases to X".
+
+    Verified on saved pages: 18 destinations appear under both ``/en/...`` and
+    ``/Home/...`` in the same corpus. Following both wastes two of a fifteen-page
+    budget on identical content. It stays a heuristic -- nothing guarantees the
+    two forms always agree -- so callers should deprioritise and log, never drop.
+    """
+    key = canonical_key(url)
+    host, _, path = key.partition("/")
+    if not path:
+        return None
+    first, separator, rest = path.partition("/")
+    if first.split("?")[0] not in config.URL_SCHEME_PREFIXES:
+        return None
+    return f"{host}/{rest}" if separator and rest else host
+
+
 # --------------------------------------------------------------------------
 # Labels
 # --------------------------------------------------------------------------
+_INVISIBLE = str.maketrans(config.INVISIBLE_TRANSLATION)
+
+
 def _clean_text(value: str) -> str:
-    return re.sub(r"\s+", " ", value or "").strip()
+    # Invisible characters are removed before whitespace collapsing because
+    # Python's \s does not match U+200B or U+FEFF -- they would otherwise
+    # survive into the label and be spent as prompt tokens for nothing.
+    return re.sub(r"\s+", " ", (value or "").translate(_INVISIBLE)).strip()
 
 
 def _cap(label: str) -> str:

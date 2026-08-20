@@ -1,0 +1,103 @@
+"""
+Navigation policy for the Banque Misr research agent.
+
+What it does
+    Holds the agent's tunables: where a run starts, how far it may go, which
+    model picks the links, and how candidate links are scored before they reach
+    that model.
+
+Inputs
+    None. Pure data.
+
+Outputs
+    Module-level constants.
+
+Why it is needed
+    Separates *policy* (how boldly to navigate, what to spend) from
+    *perception* (``browsing/config.py``, how to read a page). It also isolates
+    the one hardcoded URL the project is allowed to contain -- the seed. Every
+    other destination must be discovered by following links at runtime.
+
+Topic-agnosticism
+    Nothing here names a product, category or page. The ranking weights below
+    read only structural facts about a link (where on the page it was found,
+    when it was discovered, how often it has been offered). None of them looks
+    at the sub-goal text, which is what keeps a lexical filter from quietly
+    becoming the agent.
+"""
+
+from __future__ import annotations
+
+# --- Where a run starts ----------------------------------------------------
+# The only URL in the source tree. Everything else is discovered live.
+SEED_URL = "https://www.banquemisr.com/"
+
+# --- Caps ------------------------------------------------------------------
+# Observed depth: homepage -> category -> list -> product detail is 3 hops, and
+# a linked fee PDF adds a 4th, so 5 leaves one spare for a wrong turn.
+MAX_HOPS = 5
+MAX_PAGES = 15
+# Measured on the real homepage: 50 candidates is ~5.6k characters, roughly
+# 1,400-1,650 prompt tokens. See README for the per-hop cost.
+CANDIDATE_LIMIT = 50
+
+# --- Model -----------------------------------------------------------------
+MODEL = "claude-opus-5"
+# Link selection is a judgement call over a short list, not a research task.
+# Low effort keeps adaptive thinking brief. Note: do NOT disable thinking on
+# this model to save tokens -- with thinking off it sometimes writes a tool call
+# into visible text and can leak reasoning tags. Lower the effort instead.
+EFFORT = "low"
+MAX_TOKENS = 4096
+# Self-reported LLM confidence is weakly calibrated, so nothing branches on it
+# by default. Raise this to make the navigator treat low-confidence picks as
+# "no candidate".
+MIN_CONFIDENCE = 0.0
+
+# --- Candidate ranking weights ---------------------------------------------
+# Additive score; higher is offered sooner. All signals are structural.
+WEIGHT_CURRENT_PAGE = 3.0        # found on the page we are standing on
+WEIGHT_RECENCY = 1.0             # divided by (1 + hops since discovery)
+WEIGHT_SOURCE = {"body": 0.5, "footer": 0.25, "nav": 0.0}
+
+# The nav is identical on every page (60 of 173 observed links appear on all of
+# them), so after the first hop it carries almost no page-specific information.
+# It is penalised rather than dropped because it is also the only route into a
+# different section when an earlier hop went down the wrong branch.
+PENALTY_NAV_AFTER_FIRST_HOP = 0.75
+
+# A link the model saw and did not choose is demoted, never removed: it was not
+# rejected, merely not ranked first, and it is exactly what should be tried
+# when the first choice dead-ends.
+PENALTY_PER_OFFER = 0.5
+
+# See browsing.extract_links.alias_key -- the same page under the other URL
+# scheme. Deprioritised and logged, never dropped, because the equivalence is
+# a heuristic.
+PENALTY_ALIAS_VISITED = 1.5
+
+# No page region may be crowded out of the offered list entirely.
+#
+# Measured on the real homepage: 40 body links outscore 11 footer ones, so a
+# straight top-40 cut offered zero footer links -- putting the footer-only fees
+# hub and the sitemap out of reach on the first hop, and with them a whole
+# class of sub-goal. The footer runs 11-13 links and is nearly identical on
+# every page, so reserving enough to cover it entirely is cheap and removes any
+# dependence on where in the footer a given link happens to sit.
+#
+# This is a structural diversity guarantee. It reserves room for a *region*,
+# never for a particular destination.
+REGION_RESERVED_SLOTS = {"footer": 13, "nav": 6}
+
+# --- WAF detection ---------------------------------------------------------
+# The site sits behind an F5 BIG-IP WAF that answers HTTP 200 with a block
+# page, so fetch_page reports ok=True and the agent would happily parse the
+# refusal as content and cite it. Detected as: a marker below AND almost no
+# links (a real page carries 70+). Hitting a WAF that has already flagged you
+# is how a run turns into a ban, so detection aborts the whole navigation.
+WAF_BLOCK_MARKERS: tuple[str, ...] = (
+    "the requested url was rejected",
+    "your support id is",
+    "access denied",
+)
+WAF_MAX_LINKS = 5

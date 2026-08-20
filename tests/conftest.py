@@ -6,6 +6,7 @@ and HTML comes from inline strings or ``fixtures/synthetic/``.
 
 from __future__ import annotations
 
+import json
 import pathlib
 import sys
 
@@ -97,3 +98,87 @@ def minimal_pdf(lines: list[str]) -> bytes:
         out += f"{offset:010d} 00000 n \n"
     out += f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n"
     return out.encode("latin-1")
+
+
+# --------------------------------------------------------------------------
+# Live-fixture support for the navigation tests
+# --------------------------------------------------------------------------
+LIVE = pathlib.Path(__file__).resolve().parent.parent / "fixtures" / "live"
+
+
+def live_manifest() -> dict:
+    manifest = LIVE / "manifest.json"
+    if not manifest.is_file():
+        return {"pages": []}
+    return json.loads(manifest.read_text(encoding="utf-8"))
+
+
+def live_routes() -> dict[str, object]:
+    """Map each saved page's real URL to a response replaying it.
+
+    Serving the fixtures through a FakeSession means the tests exercise the
+    real Fetcher -- decoding, classification, caching, escalation -- rather
+    than a stub that would hide a regression in any of them.
+    """
+    from browsing.extract_links import canonical_key
+
+    routes: dict[str, object] = {}
+    for record in live_manifest().get("pages", []):
+        url = record.get("url")
+        if not url:
+            continue
+        for name in record.get("files") or []:
+            path = LIVE / name
+            if not path.is_file():
+                continue
+            if name.endswith(".html"):
+                routes[url] = FakeResponse(url, content=path.read_bytes(), content_type="text/html")
+            elif name.endswith(".pdf"):
+                routes[url] = FakeResponse(
+                    url, content=path.read_bytes(), content_type="application/pdf"
+                )
+    # The seed is saved under its canonical form; accept the bare host too.
+    for url in list(routes):
+        if canonical_key(url) == "banquemisr.com":
+            routes.setdefault("https://www.banquemisr.com/", routes[url])
+    return routes
+
+
+def live_fetcher(**kwargs):
+    """A real Fetcher wired to the saved pages, with no delay and no network."""
+    from browsing.fetcher import Fetcher
+
+    kwargs.setdefault("respect_robots", False)
+    kwargs.setdefault("delay_range", (0.0, 0.0))
+    kwargs.setdefault("allow_playwright", False)
+    return Fetcher(session=FakeSession(live_routes()), **kwargs)
+
+
+def choose_by(*needles: str):
+    """A FakeLLMClient callable that picks the first candidate line matching.
+
+    Tests drive navigation by *label*, not by index: ranking decides the
+    numbering, so a hardcoded index would break whenever a weight changes and
+    would tell us nothing about the behaviour under test.
+    """
+    remaining = list(needles)
+
+    def respond(prompt: str) -> str:
+        needle = remaining.pop(0) if remaining else None
+        if needle is None:
+            return json.dumps({"choice": -1, "reasoning": "script exhausted", "confidence": 0.4})
+        for line in prompt.splitlines():
+            index, sep, rest = line.partition(" | ")
+            if sep and index.strip().isdigit() and needle.lower() in rest.lower():
+                return json.dumps(
+                    {
+                        "choice": int(index.strip()),
+                        "reasoning": f"Following {needle!r} because it should lead to the answer.",
+                        "confidence": 0.8,
+                    }
+                )
+        return json.dumps(
+            {"choice": -1, "reasoning": f"no candidate matched {needle!r}", "confidence": 0.3}
+        )
+
+    return respond

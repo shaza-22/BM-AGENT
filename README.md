@@ -1,9 +1,14 @@
-# Banque Misr Agentic Research Assistant — Browsing Layer
+# Banque Misr Agentic Research Assistant — Browsing & Navigation
 
-The navigation/perception half of the agent: **`browsing/fetcher.py`** (how the
-agent sees a page) and **`browsing/extract_links.py`** (how it sees where it can
-go next). Planning, content extraction, validation and synthesis sit above this
-layer and are built separately.
+Two layers of the agent live here:
+
+- **`browsing/`** — perception. `fetcher.py` (how the agent sees a page) and
+  `extract_links.py` (how it sees where it can go next).
+- **`agent/`** — navigation. `link_selector.py` (which link to follow, and why)
+  and `navigator.py` (the loop from the homepage to the answering page).
+
+Planning, content extraction, validation and synthesis sit above these and are
+built separately.
 
 The agent gets one seed URL and a task, and navigates the live site itself.
 There is no pre-built index and no crawler; every task starts fresh from the
@@ -17,8 +22,15 @@ browsing/
   fetcher.py         Fetcher, fetch_page, robots_allowed, html_to_text, pdf_to_text
   extract_links.py   normalize_url, canonical_key, extract_links, link_label
   _demo.py           argument handling for the __main__ blocks (not agent API)
+agent/
+  config.py          seed URL, caps, model, ranking weights, WAF markers
+  llm.py             LLMClient protocol, ClaudeLLMClient, FakeLLMClient
+  link_selector.py   ranking, prompt, defensive parsing, select_next_link
+  navigator.py       the navigation loop -> NavigationResult
+  trail_log.py       JSON Lines step log for the frontend and evaluation
 scripts/
   save_fixtures.py   one-off: snapshot live pages into fixtures/live/
+  live_navigate.py   watch one sub-goal navigate (demo / smoke check)
 fixtures/
   fixture_urls.txt   the pages to snapshot (data, not code)
   synthetic/         hand-written pages reproducing each site quirk
@@ -30,7 +42,7 @@ tests/               pytest suite, fully offline
 
 ```bash
 pip install -r requirements.txt
-pytest                                  # 145 tests, no network
+pytest                                  # 231 tests, no network
 python scripts/save_fixtures.py         # ONE-OFF, hits the live site
 ```
 
@@ -78,6 +90,50 @@ print(fetcher.stats)                     # fetches, cache hits, escalations, err
 
 `fetch` never raises. A failed hop returns `ok: False` with an `error`, so the
 agent loop can try a different link instead of losing the task.
+
+## Navigating
+
+```python
+from agent import Navigator
+from agent.llm import ClaudeLLMClient
+
+navigator = Navigator(ClaudeLLMClient())          # one per task
+result = navigator.navigate("find the annual fee of the classic credit card")
+
+print(result.status)          # resolved | exhausted | no_candidates | blocked | error
+print(result.sources)         # every URL actually fetched -- the evidence
+for step in result.trail:
+    print(step.hop, step.label, step.reasoning)
+```
+
+Watch a run:
+
+```bash
+python scripts/live_navigate.py "Where are the fee schedules?" --offline
+python scripts/live_navigate.py "Find the classic credit card" --resolve-on "annual fee"
+```
+
+`--offline` replays `fixtures/live/` through the real `Fetcher`, so you can tune
+the prompt against real pages without touching the site. Reach for it by
+default: the site is behind an F5 WAF that bans on burst traffic.
+
+`validate_fn(sub_goal, page) -> {"resolved", "extracted", "reason"}` is the seam
+for the validation layer. It receives the whole `PageDict` (`raw_html` for
+tables, `text` for prose, `url` for attribution) and defaults to a stub that
+never resolves, so the loop is exercisable before the real validator exists.
+
+### Cost and pacing per hop
+
+Measured on the real homepage: the system prompt plus 50 candidates is ~5.8k
+characters, roughly **1,450–1,700 input tokens**. With ~400 output tokens
+(reasoning plus adaptive thinking at `effort="low"`) that is about **$0.02 a
+hop**, so **~$0.10 for a sub-goal** that runs to the 5-hop cap.
+
+Prompt caching is deliberately not used: the stable prefix is ~250 tokens and
+the minimum cacheable prefix is ~1024, so a breakpoint would silently never hit.
+
+Wall clock matters more than cost for a demo — 5 hops of (1–2s politeness delay
++ fetch + one model call) is **20–35s per sub-goal**.
 
 ## Design decisions
 
@@ -136,6 +192,53 @@ instances do not share a politeness clock, so N concurrent tasks hit the host at
 N times the rate. Pass one shared `RateLimiter` to every `Fetcher` if that
 matters.
 
+**Frontier search, not a strict tree-walk.** Candidates accumulate across the
+whole run, so hop 4 can follow a link first seen on hop 1. The site repeats its
+entire navigation on every page — 60 of the 173 distinct links across the saved
+pages appear on all of them — so the link that answers a sub-goal is often one
+that was already on screen two hops ago. With a five-hop budget there is no room
+to re-walk a tree to reach it. Every `TrailStep` records `from_url` and
+`discovered_at_hop`, so a lateral jump reads plainly in the log; a depth-first
+run is just the case where `discovered_at_hop == hop - 1` throughout.
+
+**Ranking is structural and never reads the sub-goal.** Links are scored on
+where they were found, how long ago, which page region, and how often they have
+already been offered — never on matching sub-goal words against labels. A
+lexical filter would quietly become the agent and would fail on any sub-goal
+phrased differently from the site's own vocabulary. The model does the semantic
+work; ranking only decides what fits in the prompt.
+`test_ranking_is_independent_of_the_sub_goal` pins this down.
+
+**Passed-over links decay, they are not dropped.** A link the model saw and did
+not choose was not rejected — only out-ranked — and it is the natural next try
+when the first choice dead-ends. Same for nav links after the first hop: they
+are penalised because they are identical on every page, but kept because they
+are the only route into a different section after a wrong turn.
+
+**No page region may be crowded out.** Measured: the homepage has 40 body links
+against 11 footer ones, so a straight top-N cut offered zero footer links —
+putting the footer-only fees hub and sitemap out of reach on the first hop.
+Regions now get reserved slots, filled round-robin and capped at half the list
+so they can never starve the ranking itself.
+
+**The model picks a candidate by index, not by URL.** A model asked for a URL
+will occasionally invent one or reword an encoded path. An index either names a
+link the agent actually found or is out of range, which is detectable and
+becomes "no candidate" instead of a fetch to a made-up address.
+
+**"None of these" is a first-class outcome.** When the site does not cover a
+sub-goal, the correct answer is to say so. That returns `no_candidates` with the
+model's reasoning, not a low-confidence guess. Self-reported confidence is
+logged but not gated on by default — it is weakly calibrated — with
+`MIN_CONFIDENCE` available if you want a threshold.
+
+**A WAF block page aborts the whole run.** The F5 WAF answers HTTP 200 with an
+"Access Denied" page, so `fetch_page` reports `ok=True` and the agent would
+otherwise parse the refusal as content and could cite it. It is detected
+structurally (marker text plus a near-empty link list — a real page carries 70+)
+and returns `status="blocked"`, because continuing to hit a WAF that has already
+flagged you is how a run becomes a ban.
+
 **Nothing here is topic-specific.** No product names, no category keywords, no
 per-topic branching, no hardcoded page URLs. The only site-specific facts are
 structural (the domain, Sitecore's parameter names, the language markers) and
@@ -169,3 +272,9 @@ design; that is what makes the heuristic visible when you run
   the live file actually says before relying on it.
 - Playwright uses the synchronous API. An async agent loop would need the async
   variant; it is isolated in one method.
+- The `/en/X-Y` ↔ `/Home/X%20Y` equivalence (`alias_key`) is a heuristic. It
+  holds for the 18 duplicate pairs found in the saved pages, but nothing
+  guarantees the two forms always serve identical content, so it only ever
+  deprioritises and warns — it never drops a link or keys the cache.
+- Per-hop token figures are character-based estimates, not `count_tokens`
+  measurements. Re-measure against the API before quoting them as costs.

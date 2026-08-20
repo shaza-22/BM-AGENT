@@ -136,6 +136,34 @@ SLUG_NOISE_SEGMENTS: frozenset[str] = frozenset(
 )
 STRIPPABLE_EXTENSIONS: frozenset[str] = frozenset({".aspx", ".ashx", ".html", ".htm", ".php"})
 
+# --- Invisible characters --------------------------------------------------
+# Sitecore emits zero-width spaces inside labels ("Get a Card\u200b Use BM
+# cards..."). Python's \s does NOT match U+200B or U+FEFF, so they survive
+# whitespace collapsing, inflate label length and waste prompt context.
+# U+00A0 is matched by \s but is normalised here so it never reaches a label
+# as a non-breaking space.
+INVISIBLE_TRANSLATION = {
+    0x200B: None,  # zero width space
+    0x200C: None,  # zero width non-joiner
+    0x200D: None,  # zero width joiner
+    0x200E: None,  # left-to-right mark
+    0x200F: None,  # right-to-left mark
+    0xFEFF: None,  # byte order mark / zero width no-break space
+    0x00AD: None,  # soft hyphen
+    0x00A0: " ",   # non-breaking space
+}
+
+# --- Alternate URL schemes -------------------------------------------------
+# The same content is served under two path schemes:
+#   /en/ABOUT-US/History   (appears in nav)
+#   /Home/ABOUT%20US/History   (appears in body/footer)
+# canonical_key already folds hyphens to spaces, so after keying these differ
+# only in the leading segment. Stripping a leading segment from this set gives
+# an alias key that links the two. This is a HEURISTIC -- the two forms are not
+# guaranteed to be identical pages -- so it is only ever used to deprioritise
+# and warn, never to drop a link or to key the cache.
+URL_SCHEME_PREFIXES: frozenset[str] = frozenset({"en", "home"})
+
 # --- Labels ----------------------------------------------------------------
 # Some links wrap a heading *and* a description; the combined text is useful
 # context for the planner but must not blow up the prompt.

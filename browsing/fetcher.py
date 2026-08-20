@@ -88,8 +88,11 @@ class PageDict(TypedDict):
 # --------------------------------------------------------------------------
 # Text rendering
 # --------------------------------------------------------------------------
+_INVISIBLE = str.maketrans(config.INVISIBLE_TRANSLATION)
+
+
 def _clean_inline(value: str) -> str:
-    return re.sub(r"[ \t ​]+", " ", value or "").strip()
+    return re.sub(r"[^\S\n]+", " ", (value or "").translate(_INVISIBLE)).strip()
 
 
 def _render_rows(rows: list[list[str | None]]) -> str:

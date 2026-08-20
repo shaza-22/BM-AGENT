@@ -234,11 +234,18 @@ def main() -> int:
         logger.info("discovered %d PDF-hinted links", len(candidates))
         for candidate in candidates[:MAX_PDF_ATTEMPTS]:
             record = save_pdf(candidate, fetcher, session, limiter, args.out)
-            if record:
-                records.append(record)
+            if not record:
+                continue
+            records.append(record)
+            if record["ok"]:
                 break
+            # A real PDF that yields no text is image-only (a scanned guide).
+            # It is saved, but it is useless as extraction test data, so keep
+            # trying candidates until one produces readable text.
+            logger.info("saved %s but it has no extractable text; trying the next candidate",
+                        record["requested_url"])
         else:
-            logger.warning("no candidate link resolved to a real PDF")
+            logger.warning("no candidate link produced a PDF with extractable text")
 
     manifest = {
         "generated_at": records[0]["fetched_at"] if records else None,
