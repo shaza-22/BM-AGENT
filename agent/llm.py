@@ -30,6 +30,7 @@ import logging
 import os
 import pathlib
 import re
+import time
 from typing import Any, Callable, Protocol, Sequence
 
 from agent import config
@@ -43,8 +44,110 @@ class LLMError(RuntimeError):
     """Raised when the model cannot be reached or refuses to answer.
 
     The navigator catches this and ends the run with ``status="error"`` rather
-    than letting an API problem crash a task mid-way.
+    than letting an API problem crash a task mid-way. ``status`` carries the
+    HTTP code when one could be determined, and ``retryable`` records whether
+    the failure was the kind that retrying could have fixed.
     """
+
+    def __init__(self, message: str, *, status: int | None = None, retryable: bool = False) -> None:
+        super().__init__(message)
+        self.status = status
+        self.retryable = retryable
+
+
+def _status_of(exc: Exception) -> int | None:
+    """Best-effort HTTP status for an SDK exception.
+
+    Each SDK names it differently -- anthropic uses ``status_code``,
+    google-genai uses ``code`` -- and some transports only put it in the
+    message, so all three are tried.
+    """
+    for attribute in ("status_code", "code"):
+        value = getattr(exc, attribute, None)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str) and value.isdigit():
+            return int(value)
+    response_status = getattr(getattr(exc, "response", None), "status_code", None)
+    if isinstance(response_status, int):
+        return response_status
+    match = re.search(r"\b([45]\d{2})\b", str(exc))
+    return int(match.group(1)) if match else None
+
+
+def _looks_transient(exc: Exception) -> bool:
+    """Whether a status-less failure is the kind a retry could fix.
+
+    Deliberately narrow: a connection reset or an overload notice is worth
+    another attempt, a TypeError in our own request is not.
+    """
+    name = getattr(getattr(exc, "status", None), "name", None) or getattr(exc, "status", None)
+    if isinstance(name, str) and name.strip().upper() in config.LLM_TRANSIENT_STATUS_NAMES:
+        return True
+    haystack = f"{type(exc).__name__} {exc}".lower()
+    return any(
+        marker in haystack
+        for marker in ("timeout", "timed out", "connection", "unavailable", "overloaded", "temporarily")
+    )
+
+
+def _as_llm_error(exc: Exception, provider: str) -> LLMError:
+    if isinstance(exc, LLMError):
+        return exc
+    status = _status_of(exc)
+    if status in config.LLM_PERMANENT_STATUS:
+        retryable = False
+    elif status in config.LLM_TRANSIENT_STATUS:
+        retryable = True
+    else:
+        retryable = status is None and _looks_transient(exc)
+    # `from None` at the raise site keeps the raw SDK error out of tracebacks;
+    # its message is scrubbed of key-shaped text before it is carried over.
+    return LLMError(
+        f"{provider} request failed: {scrub(str(exc))}", status=status, retryable=retryable
+    )
+
+
+def retry_api_call(
+    operation: Callable[[], Any],
+    *,
+    provider: str,
+    attempts: int | None = None,
+    sleep: Callable[[float], None] | None = None,
+) -> Any:
+    """Run one API call, retrying transient failures with exponential backoff.
+
+    Mirrors what ``browsing.fetcher`` already does for HTTP: overload and
+    gateway failures get another attempt, settled answers such as an invalid
+    key or an unknown model fail immediately. Every retry is logged, because a
+    run that silently took four attempts is a run whose timing needs
+    explaining.
+    """
+    total = max(1, attempts if attempts is not None else config.LLM_MAX_ATTEMPTS)
+    pause = sleep if sleep is not None else time.sleep
+
+    for attempt in range(1, total + 1):
+        try:
+            return operation()
+        except Exception as exc:
+            error = _as_llm_error(exc, provider)
+            if not error.retryable or attempt == total:
+                if error.retryable:
+                    logger.error("%s call failed after %d attempts: %s", provider, total, error)
+                raise error from None
+            delay = min(
+                config.LLM_RETRY_BACKOFF_S * (2 ** (attempt - 1)),
+                config.LLM_RETRY_MAX_BACKOFF_S,
+            )
+            logger.warning(
+                "%s call failed (status=%s, attempt %d/%d): %s -- retrying in %.1fs",
+                provider, error.status, attempt, total, error, delay,
+            )
+            pause(delay)
+
+    raise LLMError(f"{provider} call exhausted its attempts")  # pragma: no cover
 
 
 def load_project_env() -> None:
@@ -121,10 +224,14 @@ class ClaudeLLMClient:
         max_tokens: int = config.CLAUDE_MAX_TOKENS,
         client: Any | None = None,
         enable_fallbacks: bool = True,
+        max_attempts: int | None = None,
+        sleep: Callable[[float], None] | None = None,
     ) -> None:
         self.model = model
         self.effort = effort
         self.max_tokens = max_tokens
+        self.max_attempts = max_attempts if max_attempts is not None else config.LLM_MAX_ATTEMPTS
+        self._sleep = sleep
         self._client = client
         # Server-side refusal fallback: if a safety classifier declines, the
         # same request is re-run on another model inside the same call instead
@@ -184,31 +291,45 @@ class ClaudeLLMClient:
         return text
 
     def _send(self, client: Any, request: dict[str, Any]) -> Any:
-        """Send the request, degrading gracefully if fallbacks are unsupported."""
+        """Send the request, degrading gracefully if fallbacks are unsupported.
+
+        Transient failures are retried inside each branch, so an overloaded
+        endpoint does not look like an unsupported parameter and trigger the
+        degradation path by mistake.
+        """
         if self._enable_fallbacks:
             try:
-                return client.beta.messages.create(
-                    betas=["server-side-fallback-2026-07-01"],
-                    fallbacks="default",
-                    **request,
+                return retry_api_call(
+                    lambda: client.beta.messages.create(
+                        betas=["server-side-fallback-2026-07-01"],
+                        fallbacks="default",
+                        **request,
+                    ),
+                    provider="Claude",
+                    attempts=self.max_attempts,
+                    sleep=self._sleep,
                 )
-            except Exception as exc:
+            except LLMError as exc:
                 if not _looks_like_unsupported_parameter(exc):
-                    raise LLMError(f"Claude request failed: {scrub(str(exc))}") from None
+                    raise
                 # An older SDK or endpoint that does not know the parameter --
                 # disable it for the rest of the run rather than failing.
                 logger.warning("refusal fallbacks unsupported here (%s); continuing without", exc)
                 self._enable_fallbacks = False
 
-        try:
-            return client.messages.create(**request)
-        except Exception as exc:
-            # `from None` on purpose: chaining would put the raw SDK error into
-            # every traceback, unscrubbed.
-            raise LLMError(f"Claude request failed: {scrub(str(exc))}") from None
+        return retry_api_call(
+            lambda: client.messages.create(**request),
+            provider="Claude",
+            attempts=self.max_attempts,
+            sleep=self._sleep,
+        )
 
 
 def _looks_like_unsupported_parameter(exc: Exception) -> bool:
+    # A retryable failure is an overloaded endpoint, not an unknown parameter;
+    # treating it as one would silently disable fallbacks for the whole run.
+    if isinstance(exc, LLMError) and exc.retryable:
+        return False
     message = str(exc).lower()
     return isinstance(exc, TypeError) or "beta" in message or "fallback" in message
 
@@ -238,9 +359,13 @@ class GeminiLLMClient:
         max_tokens: int = config.GEMINI_MAX_TOKENS,
         client: Any | None = None,
         api_key_env: str = config.GEMINI_API_KEY_ENV,
+        max_attempts: int | None = None,
+        sleep: Callable[[float], None] | None = None,
     ) -> None:
         self.model = model
         self.max_tokens = max_tokens
+        self.max_attempts = max_attempts if max_attempts is not None else config.LLM_MAX_ATTEMPTS
+        self._sleep = sleep
         self._client = client
         self._api_key_env = api_key_env
         # Cleared if the API turns out not to accept the schema, so the run
@@ -300,16 +425,20 @@ class GeminiLLMClient:
             settings["response_json_schema"] = schema
 
         try:
-            response = client.models.generate_content(
-                model=self.model, contents=prompt, config=settings
+            response = retry_api_call(
+                lambda: client.models.generate_content(
+                    model=self.model, contents=prompt, config=settings
+                ),
+                provider="Gemini",
+                attempts=self.max_attempts,
+                sleep=self._sleep,
             )
-        except Exception as exc:
-            message = scrub(str(exc))
-            if schema is not None and _looks_like_schema_rejection(message):
-                raise _SchemaRejected(message) from None
-            # `from None` on purpose: chaining would put the raw SDK error into
-            # every traceback, unscrubbed.
-            raise LLMError(f"Gemini request failed: {message}") from None
+        except LLMError as exc:
+            # A rejected schema is a 400, so it is never retried; it degrades to
+            # plain text instead. Anything else propagates already scrubbed.
+            if schema is not None and not exc.retryable and _looks_like_schema_rejection(str(exc)):
+                raise _SchemaRejected(str(exc)) from None
+            raise
 
         text = response.text
         if not text:

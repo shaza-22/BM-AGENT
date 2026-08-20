@@ -12,10 +12,11 @@ import types
 
 import pytest
 
-from conftest import FAKE_KEY, StubAnthropic, StubGemini, text_response
+from conftest import FAKE_KEY, StubAnthropic, StubGemini, no_sleep, text_response
 
 from agent import config
 from agent.llm import (
+    retry_api_call,
     ClaudeLLMClient,
     FakeLLMClient,
     GeminiLLMClient,
@@ -113,7 +114,7 @@ class TestClaudeLLMClient:
     def test_api_failure_becomes_an_llm_error(self):
         stub = StubAnthropic(beta_error=RuntimeError("connection reset"))
         with pytest.raises(LLMError, match="connection reset"):
-            ClaudeLLMClient(client=stub).complete("hi")
+            ClaudeLLMClient(client=stub, sleep=no_sleep).complete("hi")
 
     def test_missing_sdk_reports_how_to_install_it(self, monkeypatch):
         # The project must import and test without the anthropic package.
@@ -161,14 +162,16 @@ class TestGeminiLLMClient:
     def test_schema_rejection_falls_back_to_defensive_parsing(self):
         # Structured output is a different binding on this API, so a rejection
         # must degrade to plain text rather than failing every hop.
-        stub = StubGemini(text='{"choice": 1}', error=ValueError("Invalid JSON schema supplied"))
+        stub = StubGemini(text='{"choice": 1}', error=ValueError("Invalid JSON schema supplied"),
+                          errors_until=1)
         client = GeminiLLMClient(client=stub)
         assert client.complete("hi", schema={"type": "object"}) == '{"choice": 1}'
         assert "response_json_schema" in stub.configs[0]
         assert "response_json_schema" not in stub.configs[1]
 
     def test_schema_rejection_is_remembered(self):
-        stub = StubGemini(text="{}", error=ValueError("Invalid JSON schema supplied"))
+        stub = StubGemini(text="{}", error=ValueError("Invalid JSON schema supplied"),
+                          errors_until=1)
         client = GeminiLLMClient(client=stub)
         client.complete("one", schema={"type": "object"})
         client.complete("two", schema={"type": "object"})
@@ -176,9 +179,9 @@ class TestGeminiLLMClient:
         assert sum(1 for c in stub.configs if "response_json_schema" in c) == 1
 
     def test_other_errors_become_llm_errors(self):
-        stub = StubGemini(error=RuntimeError("429 quota exceeded"), errors_until=99)
+        stub = StubGemini(error=RuntimeError("429 quota exceeded"))
         with pytest.raises(LLMError, match="quota exceeded"):
-            GeminiLLMClient(client=stub).complete("hi")
+            GeminiLLMClient(client=stub, sleep=no_sleep).complete("hi")
 
     def test_empty_reply_reports_why(self):
         stub = StubGemini(text="", candidates=[types.SimpleNamespace(finish_reason="SAFETY")])
@@ -223,7 +226,7 @@ class TestApiKeyHandling:
         # SDK errors sometimes echo request details, and an error message is
         # exactly the text that ends up pasted into a bug report.
         monkeypatch.setenv(config.GEMINI_API_KEY_ENV, FAKE_KEY)
-        stub = StubGemini(error=RuntimeError(f"401 from ?key={FAKE_KEY}"), errors_until=99)
+        stub = StubGemini(error=RuntimeError(f"401 from ?key={FAKE_KEY}"))
         with caplog.at_level(logging.DEBUG):
             with pytest.raises(LLMError) as excinfo:
                 GeminiLLMClient(client=stub).complete("hi")
@@ -236,7 +239,7 @@ class TestApiKeyHandling:
         # A chained __cause__ would reproduce the unscrubbed message wherever
         # the traceback is printed.
         monkeypatch.setenv(config.GEMINI_API_KEY_ENV, FAKE_KEY)
-        stub = StubGemini(error=RuntimeError(f"boom {FAKE_KEY}"), errors_until=99)
+        stub = StubGemini(error=RuntimeError(f"boom {FAKE_KEY}"))
         with pytest.raises(LLMError) as excinfo:
             GeminiLLMClient(client=stub).complete("hi")
         assert excinfo.value.__cause__ is None
@@ -301,3 +304,174 @@ class TestProviderSelection:
         monkeypatch.setattr("agent.llm.load_project_env", lambda: None)
         monkeypatch.delenv(config.GEMINI_API_KEY_ENV, raising=False)
         assert make_llm_client("gemini") is not None
+
+
+class TestTransientRetry:
+    """A single 503 from a free-tier endpoint used to end a whole run.
+
+    The fetcher already retried transient HTTP failures; the selector is called
+    once per hop, so the same failure there was far more expensive.
+    """
+
+    def recording_sleep(self):
+        delays: list[float] = []
+        return delays, delays.append
+
+    @pytest.mark.parametrize("status", sorted(config.LLM_TRANSIENT_STATUS))
+    def test_transient_statuses_are_retried(self, status):
+        calls = {"n": 0}
+
+        def operation():
+            calls["n"] += 1
+            if calls["n"] < 3:
+                error = RuntimeError(f"{status} transient")
+                error.code = status
+                raise error
+            return "ok"
+
+        assert retry_api_call(operation, provider="Test", sleep=no_sleep) == "ok"
+        assert calls["n"] == 3
+
+    @pytest.mark.parametrize("status", sorted(config.LLM_PERMANENT_STATUS))
+    def test_permanent_statuses_fail_fast(self, status):
+        # A bad key or an unknown model will not fix itself; retrying only
+        # delays a clear message.
+        calls = {"n": 0}
+
+        def operation():
+            calls["n"] += 1
+            error = RuntimeError(f"{status} not happening")
+            error.code = status
+            raise error
+
+        with pytest.raises(LLMError) as excinfo:
+            retry_api_call(operation, provider="Test", sleep=no_sleep)
+        assert calls["n"] == 1
+        assert excinfo.value.status == status
+        assert excinfo.value.retryable is False
+
+    def test_backoff_is_exponential_and_capped(self):
+        delays, record = self.recording_sleep()
+
+        def always_503():
+            error = RuntimeError("503 UNAVAILABLE")
+            error.code = 503
+            raise error
+
+        with pytest.raises(LLMError):
+            retry_api_call(always_503, provider="Test", attempts=5, sleep=record)
+
+        assert delays == [2.0, 4.0, 8.0, 16.0]
+        assert all(delay <= config.LLM_RETRY_MAX_BACKOFF_S for delay in delays)
+
+    def test_attempt_count_is_configurable(self):
+        calls = {"n": 0}
+
+        def always_503():
+            calls["n"] += 1
+            error = RuntimeError("503 UNAVAILABLE")
+            error.code = 503
+            raise error
+
+        with pytest.raises(LLMError):
+            retry_api_call(always_503, provider="Test", attempts=2, sleep=no_sleep)
+        assert calls["n"] == 2
+
+    def test_every_retry_is_logged(self, caplog):
+        calls = {"n": 0}
+
+        def flaky():
+            calls["n"] += 1
+            if calls["n"] < 3:
+                error = RuntimeError("503 UNAVAILABLE")
+                error.code = 503
+                raise error
+            return "ok"
+
+        with caplog.at_level(logging.WARNING):
+            retry_api_call(flaky, provider="Gemini", sleep=no_sleep)
+        assert len(caplog.records) == 2
+        assert all("retrying in" in record.getMessage() for record in caplog.records)
+        assert "status=503" in caplog.text
+        assert "Gemini" in caplog.text
+
+    def test_google_style_status_name_without_a_code_is_retried(self):
+        calls = {"n": 0}
+
+        def flaky():
+            calls["n"] += 1
+            if calls["n"] < 2:
+                error = RuntimeError("service is having trouble")
+                error.status = "UNAVAILABLE"
+                raise error
+            return "ok"
+
+        assert retry_api_call(flaky, provider="Gemini", sleep=no_sleep) == "ok"
+
+    def test_connection_failures_without_a_status_are_retried(self):
+        calls = {"n": 0}
+
+        def flaky():
+            calls["n"] += 1
+            if calls["n"] < 2:
+                raise ConnectionError("connection reset by peer")
+            return "ok"
+
+        assert retry_api_call(flaky, provider="Gemini", sleep=no_sleep) == "ok"
+
+    def test_programming_errors_are_not_retried(self):
+        calls = {"n": 0}
+
+        def broken():
+            calls["n"] += 1
+            raise TypeError("unexpected keyword argument")
+
+        with pytest.raises(LLMError):
+            retry_api_call(broken, provider="Test", sleep=no_sleep)
+        assert calls["n"] == 1
+
+    def test_retry_message_is_scrubbed(self):
+        def leaky():
+            error = RuntimeError(f"503 from ?key={FAKE_KEY}")
+            error.code = 503
+            raise error
+
+        with pytest.raises(LLMError) as excinfo:
+            retry_api_call(leaky, provider="Gemini", attempts=2, sleep=no_sleep)
+        assert FAKE_KEY not in str(excinfo.value)
+
+
+class TestClientsRetry:
+    def test_gemini_recovers_from_a_transient_failure(self):
+        # The live symptom: 503 UNAVAILABLE on hop 1 ended the run at 0 hops.
+        error = RuntimeError("503 UNAVAILABLE")
+        error.code = 503
+        stub = StubGemini(text='{"choice": 0}', error=error, errors_until=2)
+        client = GeminiLLMClient(client=stub, sleep=no_sleep)
+        assert client.complete("hi") == '{"choice": 0}'
+        assert len(stub.configs) == 3
+
+    def test_claude_recovers_from_a_transient_failure(self):
+        error = RuntimeError("529 overloaded")
+        error.status_code = 503
+        stub = StubAnthropic(text_response("ok"), beta_error=error, errors_until=1)
+        client = ClaudeLLMClient(client=stub, sleep=no_sleep)
+        assert client.complete("hi") == "ok"
+
+    def test_an_overloaded_endpoint_does_not_disable_claude_fallbacks(self):
+        # A retryable failure must not be mistaken for an unsupported
+        # parameter, which would silently drop fallbacks for the whole run.
+        error = RuntimeError("503 overloaded")
+        error.status_code = 503
+        stub = StubAnthropic(text_response("ok"), beta_error=error, errors_until=1)
+        client = ClaudeLLMClient(client=stub, sleep=no_sleep)
+        client.complete("hi")
+        assert client._enable_fallbacks is True
+        assert stub.calls == []          # never fell through to the non-beta path
+
+    def test_gemini_schema_rejection_is_still_not_retried(self):
+        stub = StubGemini(text="{}", error=ValueError("Invalid JSON schema supplied"),
+                          errors_until=1)
+        client = GeminiLLMClient(client=stub, sleep=no_sleep)
+        client.complete("hi", schema={"type": "object"})
+        assert len(stub.configs) == 2    # one rejected, one without the schema

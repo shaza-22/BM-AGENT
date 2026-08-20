@@ -92,6 +92,33 @@ no Gemini API key found: set GEMINI_API_KEY in the environment, or put
 GEMINI_API_KEY=<your key> in /path/to/BM-AGENT/.env (that file is gitignored)
 ```
 
+### Transient failures
+
+Free-tier endpoints return `503 UNAVAILABLE` regularly, and the selector is
+called once per hop, so one unlucky call used to end a whole run at zero hops.
+Both clients now retry transient failures with exponential backoff, mirroring
+what `browsing/fetcher.py` already does for HTTP:
+
+```python
+LLM_MAX_ATTEMPTS = 4        # 4 attempts: waits of 2s, 4s, 8s
+LLM_TRANSIENT_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
+LLM_PERMANENT_STATUS = {400, 401, 403, 404, 405, 422}
+```
+
+Permanent answers — a bad key, an unknown model — fail on the first attempt,
+because retrying only delays a clear message. Status-less failures are retried
+only when they look like a connection or overload problem; a `TypeError` in our
+own request is not. Google's `UNAVAILABLE`-style status names are recognised
+alongside the numeric codes. Every retry is logged, so a slow hop explains
+itself:
+
+```
+WARNING agent.llm: Gemini call failed (status=503, attempt 1/4): … -- retrying in 2.0s
+```
+
+Worst case a hop now takes ~14s longer before giving up rather than failing
+instantly — the right trade for a live demo.
+
 ### Provider differences worth knowing
 
 The two providers bind structured output differently, and **neither guarantees a

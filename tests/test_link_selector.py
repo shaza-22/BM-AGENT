@@ -420,6 +420,7 @@ class TestDefensiveParsingAcrossProviders:
         stub = StubGemini(
             text='{"choice": 0, "reasoning": "Alpha it is", "confidence": 0.6}',
             error=ValueError("Invalid JSON schema supplied"),
+            errors_until=1,
         )
         context = SelectionContext(hop=0, current_url=HOME)
         selection = select_next_link(

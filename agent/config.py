@@ -67,6 +67,25 @@ CLAUDE_MAX_TOKENS = 4096
 # "no candidate".
 MIN_CONFIDENCE = 0.0
 
+# --- LLM transport resilience ----------------------------------------------
+# Free-tier endpoints return 503 UNAVAILABLE regularly, and a single transient
+# failure used to end a whole navigation run. The selector is called once per
+# hop, so one retried call costs seconds where a lost run costs the task.
+LLM_MAX_ATTEMPTS = 4          # total attempts, i.e. 3 retries
+LLM_RETRY_BACKOFF_S = 2.0     # doubled each attempt
+LLM_RETRY_MAX_BACKOFF_S = 30.0
+
+# Worth retrying: overload, rate limiting, gateway and timeout failures.
+LLM_TRANSIENT_STATUS: frozenset[int] = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
+# Settled answers -- a bad key or an unknown model will not fix itself, and
+# retrying only delays a clear error message.
+LLM_PERMANENT_STATUS: frozenset[int] = frozenset({400, 401, 403, 404, 405, 422})
+# Google returns these alongside the HTTP code; some transports surface only
+# the name, so both are checked.
+LLM_TRANSIENT_STATUS_NAMES: frozenset[str] = frozenset(
+    {"UNAVAILABLE", "RESOURCE_EXHAUSTED", "INTERNAL", "DEADLINE_EXCEEDED", "ABORTED"}
+)
+
 # --- Candidate ranking weights ---------------------------------------------
 # Additive score; higher is offered sooner. All signals are structural.
 WEIGHT_CURRENT_PAGE = 3.0        # found on the page we are standing on

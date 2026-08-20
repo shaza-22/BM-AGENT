@@ -188,6 +188,10 @@ def choose_by(*needles: str):
 # --------------------------------------------------------------------------
 # LLM provider stubs
 # --------------------------------------------------------------------------
+def no_sleep(_seconds: float) -> None:
+    """Substituted for time.sleep so retry tests never actually wait."""
+
+
 # A syntactically valid Google API key that is not one. Used to prove a key
 # never reaches an error message, a log line or a repr.
 FAKE_KEY = "AIzaSyFAKE0000000000000000000000000000"
@@ -204,9 +208,13 @@ def text_response(text: str, *, stop_reason: str = "end_turn"):
 class StubAnthropic:
     """Minimal stand-in exposing both the beta and non-beta create paths."""
 
-    def __init__(self, response=None, beta_error: Exception | None = None):
+    def __init__(self, response=None, beta_error: Exception | None = None,
+                 errors_until: int | None = None):
         self.response = response or text_response("ok")
         self.beta_error = beta_error
+        # None raises on every call; N raises on the first N only, which is how
+        # a transient failure that later recovers is simulated.
+        self.errors_until = errors_until
         self.beta_calls: list[dict] = []
         self.calls: list[dict] = []
         outer = self
@@ -219,7 +227,9 @@ class StubAnthropic:
         class _BetaMessages:
             def create(self, **kwargs):
                 outer.beta_calls.append(kwargs)
-                if outer.beta_error:
+                if outer.beta_error and (
+                    outer.errors_until is None or len(outer.beta_calls) <= outer.errors_until
+                ):
                     raise outer.beta_error
                 return outer.response
 
@@ -232,7 +242,7 @@ class StubGemini:
     """Minimal stand-in for google.genai.Client."""
 
     def __init__(self, text: str = "ok", error: Exception | None = None,
-                 candidates=None, errors_until: int = 0):
+                 candidates=None, errors_until: int | None = None):
         self.text, self.error = text, error
         self.candidates = candidates
         self.errors_until = errors_until
@@ -244,7 +254,9 @@ class StubGemini:
                 outer.configs.append(config)
                 outer.last_model = model
                 outer.last_contents = contents
-                if outer.error and len(outer.configs) <= max(outer.errors_until, 1):
+                if outer.error and (
+                    outer.errors_until is None or len(outer.configs) <= outer.errors_until
+                ):
                     raise outer.error
                 return types.SimpleNamespace(
                     text=outer.text, candidates=outer.candidates, prompt_feedback=None
