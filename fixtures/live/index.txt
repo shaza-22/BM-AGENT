@@ -1,0 +1,182 @@
+Banquemisr - Home page
+IE عند تصفح بنك مصر باستخدام Microsoft Edge أحدث تقنيات الواجهة الأمامية لذلك سيحصل المستخدمون على إخلاء مسؤوليه للتبديل الى Internet Explorer لا يدعم
+ع
+En
+عربي
+History
+Board Members
+BM historical website
+Compliance and Governance
+Banque Misr Foundation
+Responsible Banking and Sustainability
+BM News
+Literacy and financial Inclusion
+Financial Indicators
+Awards
+Branches And ATMs
+Auctions and Bids
+Custody Securites Services
+Equity Participation
+Investment Trustees
+Mutual Funds
+Message From The Head of HR
+Our Recruitment Process
+Key hiring areas
+Career FAQs
+Our Values
+MSMES Platform
+POS Loan
+Micro Finance Projects
+Small Enterprises Projects
+Medium Enterprises Credit Projects
+Non-Financial Services
+Supporting Exporters
+ZAAT
+Do you need financing ?
+Apple Pay
+BM Online
+BM Wallet
+Short Term Loan
+E-Statement
+Online Express Business Account Opening
+Individuals account opening request
+Feedback
+Call Center
+Corporate Customer Support Service
+Mobile branches
+Regional and Foreign Branches
+Remittances
+Email
+ChatBot and Live chat services
+More
+BM Online
+Home
+Retail Banking
+Corporate Banking
+Islamic Banking
+Retail Banking
+Corporate Banking
+Islamic Banking
+Retail Banking
+We satisfy all your banking needs
+BMVIP Service
+The BMVIP service is provided to our VIP clients
+Get a Card
+Use BM cards and enjoy many offers
+BM Global for Residents abroad
+Your banking transactions are easier from anywhere in the world
+Get a Loan
+Get the suitable Loan from Banque Misr Loan types
+Accounts & Deposits
+Current account , Savings accounts ,Deposits account, Certificates
+View more
+Check all services which helps you
+Corporate Banking
+We satisfy all your banking needs
+Companies Cards
+Companies Cards
+Corporate Banking Accounts and certificates
+Corporate Banking Accounts and certificates
+Trade Finance
+Trade Finance
+Corporate Banking Details
+corporate banking details
+Corporate Customer Service
+Corporate Customer Service
+View more
+Check all services which helps you
+Islamic Banking
+We satisfy all your banking needs
+Kenana for business
+Islamic credit card - Kenana
+Micro Financing Murabaha
+Islamic Banking sector product
+SMEs Financing Murabaha
+Banking sector product
+Islamic Banking
+Kenana for Individual
+Individual Murabaha
+View more
+Check all services which helps you
+We Are Near By You
+Find BM branches & ATMs
+BM Locator
+{{homePageLocator.mapData.length}} Branches are ready to help you ..
+{{homePageLocator.mapData.length}} ATMs are ready to help you ..
+831 Branches are ready to help you ..
+4835 ATMs are ready to help you ..
+Show all
+Show all
+Plan Your Loan
+Manage your money with us
+Min {{minLoanAmount}}
+-
+Max {{maxLoanAmount}}
+Min {{minLoanDuration}} Month
+-
+Max {{maxLoanDuration}} Month
+{{TotalLoanWithInterests}} EGP
+The calculated loan details are indicative
+{{parseFloat(annualInterestRate).toFixed(2)}} %
+Decreasing Interest Rate
+{{parseFloat(FixedInterestRate).toFixed(2)}} %
+Fixed Interest Rate
+{{parseFloat(MonthlyPayment).toFixed(0)}} EGP
+Minimum indicative monthly installment
+{{TotalInterests}} EGP
+Total interests
+View details
+View details
+Exchange Rates
+Currencies and Exchange Rates
+{{fromCurrency}} | Cash | Transfer
+--- | --- | ---
+Buying | {{currencyCalculator.CashBuying}} | {{currencyCalculator.TransferBuying}}
+Selling | {{currencyCalculator.CashSelling}} | {{currencyCalculator.TransferSelling}}
+Go to exchange rates
+Go to exchange rates
+Our Latest News
+Keep up to date with us
+06
+Aug
+Banque Misr Participates in World Youth Day Initiative, Offering Free Banking Services to Support Financial Incl
+As part of its leading national role and continued commitment to supporting Egypt’s efforts to advance...
+02
+Aug
+Banque Misr Signs Cooperation Protocol to Join the “Update Your Data in Egypt” Initiative
+The initiative, launched by the Central Bank of Egypt in cooperation with the Ministry of Foreign Affa...
+29
+Jul
+Banque Misr Receives a Commemorative Shield from Visa in Recognition of Its Success in Launching a Comprehensive
+Banque Misr Receives a Commemorative Shield from Visa in Recognition of Its Success in Launching a Com...
+19
+Jul
+Strategic Partnership Between Banque Misr and the Ministry of Justice to Provide Real Estate Registration and No
+In line with supporting the Egyptian state's efforts to modernize government services and advance digi...
+22
+Jun
+Banque Misr Raises the Return on the Three-Year "Al-Qema" Certificate to 17.85% Annually and Launches a Suite of
+As part of its commitment to offering savings products that meet the needs of various segments of soci...
+17
+Jun
+Banque Misr Signs Two Cooperation Protocols with the New Egyptian Countryside Development Company to Support Egy
+In line with Banque Misr’s commitment to supporting the State’s efforts in achieving sustainable agr...
+Banque Misr
+BM News
+History
+Responsible Banking
+Taxes and Tariff E-Service
+Auctions and Bids
+Fees and Rates
+Sitemap
+Quick Links
+BM Cards Offers
+Exchange Rate And Currencies
+Donations
+Branches Operating In Non-Official Hours
+Annual Business and CSR Reports
+Banque Misr Historical website
+Contact us
+19888
+BM19888@banquemisr.com
+All Rights Reserved for BanqueMisr ©2022
