@@ -1,0 +1,3 @@
+Populated by scripts/save_fixtures.py. These snapshots are committed on purpose:
+they are the shared test data for the extraction and validation layers, and they
+keep development off the live site.

@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Banque Misr</title>
+<link rel="stylesheet" href="/styles/site.css">
+<script src="/js/app.js"></script>
+</head>
+<body>
+<!-- Main navigation: Vue components carrying href, NOT anchor tags. -->
+<header class="site-header">
+  <b-navbar>
+    <b-nav-item-dropdown text="Digital Services">
+      <b-dropdown-item href="/en/Digital-Services/Apple-pay">Apple Pay</b-dropdown-item>
+      <b-dropdown-item href="/en/Digital-Services/Internet%20Banking">Internet Banking</b-dropdown-item>
+      <b-dropdown-item href="https://digital.banquemisr.com/onboarding">Open Digitally</b-dropdown-item>
+    </b-nav-item-dropdown>
+    <b-nav-item-dropdown text="Retail Banking">
+      <b-dropdown-item href="/Home/SMEs/Retail%20Banking/Pages/Cards">Cards</b-dropdown-item>
+      <b-dropdown-item href="/Home/SMEs/Retail Banking/Accounts And Deposits">Accounts &amp; Deposits</b-dropdown-item>
+    </b-nav-item-dropdown>
+    <b-nav-item href="/ar-eg/Home/Pages/default.aspx">&#1575;&#1604;&#1593;&#1585;&#1576;&#1610;&#1577;</b-nav-item>
+    <b-nav-item href="/Home/Pages/Default?sc_lang=ar-EG">Arabic via param</b-nav-item>
+  </b-navbar>
+</header>
+
+<main>
+  <!-- Image-only tile: no anchor text at all. -->
+  <a href="/Home/Pages/Banque Misr visa business cards">
+    <div class="banking-kinds__img"><img src="/-/media/Main-slider/VISA-business-platinum-EN.ashx" /></div>
+  </a>
+
+  <!-- Image-only tile that does carry an alt attribute. -->
+  <a href="/Home/Pages/Payroll%20Services">
+    <div class="banking-kinds__img"><img src="/-/media/tiles/payroll.png" alt="Payroll Services for companies" /></div>
+  </a>
+
+  <!-- Heading plus description inside one link. -->
+  <a href="/Home/SMEs/Retail Banking/Consumer Loans">
+    <h3 class="banking-sector__title">Get a Loan</h3>
+    <div class="banking-sector__brief">Get the suitable Loan from Banque Misr Loan types and enjoy competitive interest rates, flexible repayment periods and a fast approval process designed around what you actually need from your bank today.</div>
+  </a>
+
+  <!-- Same destination as the nav entry above, but spelled differently. -->
+  <a href="/home/smes/retail-banking/pages/cards?csrt=8827361882736">Browse all cards</a>
+
+  <!-- Label of last resort comes from an attribute. -->
+  <a href="/Home/Pages/Branches" aria-label="Find a branch near you"><i class="icon-pin"></i></a>
+
+  <!-- Links that must be rejected. -->
+  <a href="mailto:info@banquemisr.com">Email us</a>
+  <a href="tel:+20219888">Call 19888</a>
+  <a href="javascript:void(0)">Toggle</a>
+  <a href="https://www.facebook.com/BanqueMisr">Facebook</a>
+  <a href="https://evil-banquemisr.com/phish">Special offer</a>
+  <a href="/assets/brochure-cover.png">Cover image</a>
+  <a href="#main-content">Skip to content</a>
+</main>
+
+<footer class="site-footer">
+  <!-- The footer uses real anchors, and is the ONLY route to the fees hub. -->
+  <a href="/Home/Pages/Fees">Fees and Commissions</a>
+  <a href="/Home/Pages/Terms%20and%20Conditions">Terms and Conditions</a>
+  <nav class="footer-nav"><a href="/Home/Pages/Contact%20Us">Contact Us</a></nav>
+</footer>
+</body>
+</html>

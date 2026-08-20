@@ -1,0 +1,17 @@
+# Pages to snapshot for offline testing, one per line (absolute URL or path).
+# Blank lines and lines starting with "#" are ignored.
+#
+# This list lives in a data file rather than in save_fixtures.py on purpose:
+# it keeps every product/category name out of the source tree, so the browsing
+# layer stays provably topic-agnostic.
+#
+# These paths were traced by hand and may be stale. save_fixtures.py notes any
+# that 404 and carries on; update this file rather than the script.
+
+/
+/Home/SMEs/Retail%20Banking/Pages/Cards
+/Home/SMEs/Retail%20Banking/Pages/Cards/Credit%20Cards%20List
+/Home/SMEs/Retail%20Banking/Pages/Cards/Credit%20Cards%20Pages/Classic%20Credit%20Cards
+/Home/SMEs/Retail%20Banking/Accounts%20And%20Deposits
+/Home/SMEs/Retail%20Banking/Consumer%20Loans
+/Home/Pages/Fees
