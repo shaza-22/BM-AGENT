@@ -42,7 +42,8 @@ tests/               pytest suite, fully offline
 
 ```bash
 pip install -r requirements.txt
-pytest                                  # 231 tests, no network
+cp .env.example .env                    # then paste your key into it
+pytest                                  # 263 tests, no network, no API key
 python scripts/save_fixtures.py         # ONE-OFF, hits the live site
 ```
 
@@ -61,6 +62,63 @@ python -m browsing.fetcher "fixtures/live/*.html"         # a glob
 When a `manifest.json` sits beside the fixture, each page is parsed against the
 URL it was actually saved from, so relative hrefs resolve the way they did on
 the live site.
+
+### Choosing a model provider
+
+`agent/config.py` selects the provider; `agent.llm.make_llm_client()` builds it:
+
+```python
+PROVIDER = "gemini"          # "gemini" | "claude"
+GEMINI_MODEL = "gemini-2.5-flash"
+CLAUDE_MODEL = "claude-opus-5"
+```
+
+Both implement the same `LLMClient` protocol, so nothing above `agent/llm.py`
+knows which one is in use. Each SDK is a lazy import, so only the provider you
+actually use needs installing — `google-genai` for Gemini, `anthropic` for
+Claude. Override per run with `--provider` / `--model` on `live_navigate.py`.
+
+**API keys.** Read from the environment, falling back to a `.env` file at the
+project root (`python-dotenv`; an exported variable always wins). `.env` is
+gitignored — start from `.env.example`. Keys are resolved at connect time and
+handed straight to the SDK: never stored on a client object, never in a repr,
+never in a log line or an error message. Error text from either SDK is scrubbed
+of key-shaped strings before it is raised, and the raw SDK exception is
+deliberately not chained, so it cannot resurface in a traceback. A missing key
+produces a message naming the *variable*, not a raw SDK failure:
+
+```
+no Gemini API key found: set GEMINI_API_KEY in the environment, or put
+GEMINI_API_KEY=<your key> in /path/to/BM-AGENT/.env (that file is gitignored)
+```
+
+### Provider differences worth knowing
+
+The two providers bind structured output differently, and **neither guarantees a
+reply the selector can use as-is**:
+
+| | Claude | Gemini |
+|---|---|---|
+| structured output | `output_config={"format": {"type": "json_schema", …}}` | `response_json_schema` + `response_mime_type` |
+| schema dict | the same `SELECTION_SCHEMA` for both, unmodified | ditto |
+| if the schema is refused | the request fails | falls back to plain text and keeps going |
+| reasoning depth | `effort="low"` (adaptive thinking) | model default |
+
+Gemini's binding was validated against the SDK's own type checking, not against
+a live call, so treat it as unconfirmed until you have run it once. If the API
+refuses the schema, `GeminiLLMClient` logs a warning, disables structured output
+for the rest of the run, and continues on plain text — which is exactly when
+`link_selector.parse_selection` earns its keep. That parser strips markdown
+fences, recovers JSON embedded in prose, coerces string and float indices,
+rejects out-of-range and boolean choices, and turns anything else into an
+explicit "no candidate" with the error in `reasoning`. It is tested against both
+clients with the same set of malformed replies, so switching provider cannot
+silently change navigation behaviour.
+
+One case is deliberately *not* treated as a parse failure on either provider: an
+empty reply raises `LLMError` and ends the run with `status="error"`. Parsing it
+as "no candidate fits" would read as "the site does not cover this", which is a
+different and wrong conclusion.
 
 Optional browser rendering, needed for roughly 3% of pages:
 
@@ -95,9 +153,9 @@ agent loop can try a different link instead of losing the task.
 
 ```python
 from agent import Navigator
-from agent.llm import ClaudeLLMClient
+from agent.llm import make_llm_client
 
-navigator = Navigator(ClaudeLLMClient())          # one per task
+navigator = Navigator(make_llm_client())          # one per task; provider from config
 result = navigator.navigate("find the annual fee of the classic credit card")
 
 print(result.status)          # resolved | exhausted | no_candidates | blocked | error
@@ -277,4 +335,9 @@ design; that is what makes the heuristic visible when you run
   guarantees the two forms always serve identical content, so it only ever
   deprioritises and warns — it never drops a link or keys the cache.
 - Per-hop token figures are character-based estimates, not `count_tokens`
-  measurements. Re-measure against the API before quoting them as costs.
+  measurements, and the per-hop cost quoted above is Claude pricing. Re-measure
+  before quoting either as a cost, and note that Gemini's free tier has request
+  quotas rather than per-token billing.
+- Neither provider has been exercised against its live API from this
+  environment — both paths are tested against SDK-shaped stubs only. The first
+  real call is worth watching with `--verbose`.

@@ -6,45 +6,25 @@ records the request it was handed.
 
 from __future__ import annotations
 
+import logging
+import sys
 import types
 
 import pytest
 
-from agent.llm import ClaudeLLMClient, FakeLLMClient, LLMError
+from conftest import FAKE_KEY, StubAnthropic, StubGemini, text_response
 
+from agent import config
+from agent.llm import (
+    ClaudeLLMClient,
+    FakeLLMClient,
+    GeminiLLMClient,
+    LLMError,
+    make_llm_client,
+    resolve_api_key,
+    scrub,
+)
 
-def text_response(text: str, *, stop_reason: str = "end_turn"):
-    return types.SimpleNamespace(
-        content=[types.SimpleNamespace(type="text", text=text)],
-        stop_reason=stop_reason,
-        stop_details=None,
-    )
-
-
-class StubAnthropic:
-    """Minimal stand-in exposing both the beta and non-beta create paths."""
-
-    def __init__(self, response=None, beta_error: Exception | None = None):
-        self.response = response or text_response("ok")
-        self.beta_error = beta_error
-        self.beta_calls: list[dict] = []
-        self.calls: list[dict] = []
-        outer = self
-
-        class _Messages:
-            def create(self, **kwargs):
-                outer.calls.append(kwargs)
-                return outer.response
-
-        class _BetaMessages:
-            def create(self, **kwargs):
-                outer.beta_calls.append(kwargs)
-                if outer.beta_error:
-                    raise outer.beta_error
-                return outer.response
-
-        self.messages = _Messages()
-        self.beta = types.SimpleNamespace(messages=_BetaMessages())
 
 
 class TestFakeLLMClient:
@@ -155,3 +135,169 @@ class TestClaudeLLMClient:
         ClaudeLLMClient(client=stub, model="claude-sonnet-5", effort="medium").complete("hi")
         assert stub.beta_calls[0]["model"] == "claude-sonnet-5"
         assert stub.beta_calls[0]["output_config"]["effort"] == "medium"
+
+
+class TestGeminiLLMClient:
+    def test_request_shape(self):
+        stub = StubGemini('{"choice": 0}')
+        client = GeminiLLMClient(client=stub, model="gemini-2.5-flash")
+        result = client.complete("pick one", system="be brief", schema={"type": "object"})
+
+        assert result == '{"choice": 0}'
+        assert stub.last_model == "gemini-2.5-flash"
+        assert stub.last_contents == "pick one"
+        settings = stub.configs[0]
+        assert settings["system_instruction"] == "be brief"
+        assert settings["response_mime_type"] == "application/json"
+        assert settings["response_json_schema"] == {"type": "object"}
+        assert settings["max_output_tokens"] == config.GEMINI_MAX_TOKENS
+
+    def test_schema_is_omitted_when_not_requested(self):
+        stub = StubGemini()
+        GeminiLLMClient(client=stub).complete("hi")
+        assert "response_json_schema" not in stub.configs[0]
+        assert "response_mime_type" not in stub.configs[0]
+
+    def test_schema_rejection_falls_back_to_defensive_parsing(self):
+        # Structured output is a different binding on this API, so a rejection
+        # must degrade to plain text rather than failing every hop.
+        stub = StubGemini(text='{"choice": 1}', error=ValueError("Invalid JSON schema supplied"))
+        client = GeminiLLMClient(client=stub)
+        assert client.complete("hi", schema={"type": "object"}) == '{"choice": 1}'
+        assert "response_json_schema" in stub.configs[0]
+        assert "response_json_schema" not in stub.configs[1]
+
+    def test_schema_rejection_is_remembered(self):
+        stub = StubGemini(text="{}", error=ValueError("Invalid JSON schema supplied"))
+        client = GeminiLLMClient(client=stub)
+        client.complete("one", schema={"type": "object"})
+        client.complete("two", schema={"type": "object"})
+        # One rejected attempt, then three schema-free calls.
+        assert sum(1 for c in stub.configs if "response_json_schema" in c) == 1
+
+    def test_other_errors_become_llm_errors(self):
+        stub = StubGemini(error=RuntimeError("429 quota exceeded"), errors_until=99)
+        with pytest.raises(LLMError, match="quota exceeded"):
+            GeminiLLMClient(client=stub).complete("hi")
+
+    def test_empty_reply_reports_why(self):
+        stub = StubGemini(text="", candidates=[types.SimpleNamespace(finish_reason="SAFETY")])
+        with pytest.raises(LLMError, match="SAFETY"):
+            GeminiLLMClient(client=stub).complete("hi")
+
+    def test_missing_sdk_reports_how_to_install_it(self, monkeypatch):
+        # The project must import and test without google-genai installed.
+        # A None entry in sys.modules makes the import raise, which is what an
+        # absent package looks like from inside _ensure_client.
+        import google
+
+        monkeypatch.setitem(sys.modules, "google.genai", None)
+        monkeypatch.delattr(google, "genai", raising=False)
+        monkeypatch.setenv(config.GEMINI_API_KEY_ENV, FAKE_KEY)
+        with pytest.raises(LLMError, match="pip install google-genai"):
+            GeminiLLMClient().complete("hi")
+
+
+class TestApiKeyHandling:
+    def test_missing_key_names_the_variable_not_a_raw_sdk_error(self, monkeypatch):
+        monkeypatch.setattr("agent.llm.load_project_env", lambda: None)
+        monkeypatch.delenv(config.GEMINI_API_KEY_ENV, raising=False)
+        with pytest.raises(LLMError) as excinfo:
+            GeminiLLMClient().complete("hi")
+        message = str(excinfo.value)
+        assert config.GEMINI_API_KEY_ENV in message
+        assert ".env" in message
+
+    def test_blank_key_is_treated_as_missing(self, monkeypatch):
+        monkeypatch.setattr("agent.llm.load_project_env", lambda: None)
+        monkeypatch.setenv(config.GEMINI_API_KEY_ENV, "   ")
+        with pytest.raises(LLMError, match="no Gemini API key found"):
+            resolve_api_key(config.GEMINI_API_KEY_ENV, "Gemini")
+
+    def test_key_is_read_from_the_environment(self, monkeypatch):
+        monkeypatch.setattr("agent.llm.load_project_env", lambda: None)
+        monkeypatch.setenv(config.GEMINI_API_KEY_ENV, FAKE_KEY)
+        assert resolve_api_key(config.GEMINI_API_KEY_ENV, "Gemini") == FAKE_KEY
+
+    def test_key_never_appears_in_an_error_message(self, monkeypatch, caplog):
+        # SDK errors sometimes echo request details, and an error message is
+        # exactly the text that ends up pasted into a bug report.
+        monkeypatch.setenv(config.GEMINI_API_KEY_ENV, FAKE_KEY)
+        stub = StubGemini(error=RuntimeError(f"401 from ?key={FAKE_KEY}"), errors_until=99)
+        with caplog.at_level(logging.DEBUG):
+            with pytest.raises(LLMError) as excinfo:
+                GeminiLLMClient(client=stub).complete("hi")
+
+        assert FAKE_KEY not in str(excinfo.value)
+        assert "<redacted>" in str(excinfo.value)
+        assert FAKE_KEY not in caplog.text
+
+    def test_the_raw_sdk_error_is_not_chained_into_the_traceback(self, monkeypatch):
+        # A chained __cause__ would reproduce the unscrubbed message wherever
+        # the traceback is printed.
+        monkeypatch.setenv(config.GEMINI_API_KEY_ENV, FAKE_KEY)
+        stub = StubGemini(error=RuntimeError(f"boom {FAKE_KEY}"), errors_until=99)
+        with pytest.raises(LLMError) as excinfo:
+            GeminiLLMClient(client=stub).complete("hi")
+        assert excinfo.value.__cause__ is None
+
+    def test_key_is_not_stored_on_the_client_or_its_repr(self, monkeypatch):
+        monkeypatch.setenv(config.GEMINI_API_KEY_ENV, FAKE_KEY)
+        client = GeminiLLMClient(client=StubGemini())
+        client.complete("hi")
+        assert FAKE_KEY not in repr(client)
+        assert not any(FAKE_KEY == str(value) for value in vars(client).values())
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            f"error with {FAKE_KEY}",
+            "https://api/v1?key=AIzaSyABCDEFGHIJKLMNOP123&alt=json",
+            "authorization failed for sk-ant-api03-ABCDEFGHIJKLMNOPQRS",
+        ],
+    )
+    def test_scrub_removes_key_shaped_text(self, message):
+        assert "<redacted>" in scrub(message)
+        assert "AIza" not in scrub(message) or "AIza" not in message
+        assert "sk-ant-api03-ABCDEFGHIJKLMNOPQRS" not in scrub(message)
+
+    def test_dotenv_is_optional(self, monkeypatch):
+        import builtins
+
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "dotenv":
+                raise ImportError("No module named 'dotenv'")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+        monkeypatch.setenv(config.GEMINI_API_KEY_ENV, FAKE_KEY)
+        # The key is already in the environment, so a missing .env loader is fine.
+        assert resolve_api_key(config.GEMINI_API_KEY_ENV, "Gemini") == FAKE_KEY
+
+
+class TestProviderSelection:
+    def test_default_provider_comes_from_config(self, monkeypatch):
+        monkeypatch.setattr(config, "PROVIDER", "gemini")
+        assert isinstance(make_llm_client(), GeminiLLMClient)
+        monkeypatch.setattr(config, "PROVIDER", "claude")
+        assert isinstance(make_llm_client(), ClaudeLLMClient)
+
+    def test_provider_can_be_named_explicitly(self):
+        assert isinstance(make_llm_client("claude"), ClaudeLLMClient)
+        assert isinstance(make_llm_client("GEMINI"), GeminiLLMClient)
+
+    def test_overrides_reach_the_client(self):
+        assert make_llm_client("gemini", model="gemini-2.5-pro").model == "gemini-2.5-pro"
+
+    def test_unknown_provider_is_rejected(self):
+        with pytest.raises(LLMError, match="unknown LLM provider"):
+            make_llm_client("gpt")
+
+    def test_building_a_client_does_not_need_a_key(self, monkeypatch):
+        # Keys are resolved at connect time, so constructing a Navigator is
+        # safe in a test or on a machine with no credentials.
+        monkeypatch.setattr("agent.llm.load_project_env", lambda: None)
+        monkeypatch.delenv(config.GEMINI_API_KEY_ENV, raising=False)
+        assert make_llm_client("gemini") is not None

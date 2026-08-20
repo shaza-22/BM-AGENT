@@ -13,6 +13,7 @@ import pytest
 
 from agent import config
 from agent.link_selector import (
+    SELECTION_SCHEMA,
     Candidate,
     SelectionContext,
     build_prompt,
@@ -21,7 +22,8 @@ from agent.link_selector import (
     score_candidate,
     select_next_link,
 )
-from agent.llm import FakeLLMClient
+from agent.llm import ClaudeLLMClient, FakeLLMClient, GeminiLLMClient, LLMError
+from conftest import StubAnthropic, StubGemini, text_response
 from browsing.extract_links import canonical_key
 
 HOME = "https://www.banquemisr.com/"
@@ -329,3 +331,100 @@ class TestSelectNextLink:
         llm = FakeLLMClient([reply(0, "a guess", confidence=0.05)])
         selection = select_next_link("goal", [make_candidate("/a")], set(), context, llm=llm)
         assert selection.url is not None
+
+
+class TestDefensiveParsingAcrossProviders:
+    """The parse path must hold for whichever provider config selects.
+
+    Claude and Gemini bind structured output differently -- ``output_config``
+    against ``response_json_schema`` -- and neither guarantees the reply is
+    shaped the way the selector expects. Gemini in particular may drop the
+    schema entirely (see GeminiLLMClient's degradation path), leaving plain
+    text. So the same malformed replies are pushed through both clients here,
+    not just through parse_selection in isolation.
+    """
+
+    @staticmethod
+    def claude_returning(text: str):
+        return ClaudeLLMClient(client=StubAnthropic(text_response(text)))
+
+    @staticmethod
+    def gemini_returning(text: str):
+        return GeminiLLMClient(client=StubGemini(text))
+
+    def clients(self, text: str):
+        return {"claude": self.claude_returning(text), "gemini": self.gemini_returning(text)}
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "I would click the Fees link, it looks right.",   # prose, no JSON
+            "```json\n{\"choice\": 1, \"reasoning\": \"b\", \"confidence\": 0.7}\n```",
+            'Sure! {"choice": 1, "reasoning": "b", "confidence": 0.7} Hope that helps.',
+            '{"choice": 99, "reasoning": "b", "confidence": 0.7}',   # out of range
+            '{"choice": "1", "reasoning": "b", "confidence": "high"}',
+            "{}",
+        ],
+    )
+    def test_no_reply_shape_can_break_either_client(self, raw):
+        context = SelectionContext(hop=0, current_url=HOME)
+        candidates = [make_candidate("/a", "Alpha"), make_candidate("/b", "Beta")]
+
+        for provider, llm in self.clients(raw).items():
+            selection = select_next_link("goal", candidates, set(), context, llm=llm)
+            # Either a real candidate or an explicit no-candidate, never a crash
+            # and never a URL that was not offered.
+            assert selection.url in (None, candidates[0].url, candidates[1].url), provider
+            assert selection.reasoning.strip(), provider
+            assert 0.0 <= selection.confidence <= 1.0, provider
+
+    def test_an_empty_reply_is_an_api_error_for_both_providers(self):
+        # Not a parse failure: an empty reply means nothing came back, and
+        # reporting that as "no candidate fits" would read as "the site does
+        # not cover this" -- a different and wrong conclusion. The navigator
+        # turns this into status="error" instead.
+        for provider, llm in self.clients("").items():
+            with pytest.raises(LLMError):
+                llm.complete("prompt")
+
+    def test_both_providers_parse_a_well_formed_reply_identically(self):
+        raw = '{"choice": 1, "reasoning": "Beta is closer", "confidence": 0.9}'
+        context = SelectionContext(hop=0, current_url=HOME)
+        candidates = [make_candidate("/a", "Alpha"), make_candidate("/b", "Beta")]
+
+        results = {
+            provider: select_next_link("goal", candidates, set(), context, llm=llm)
+            for provider, llm in self.clients(raw).items()
+        }
+        assert results["claude"].url == results["gemini"].url
+        assert results["claude"].label == results["gemini"].label == "Beta"
+        assert results["claude"].confidence == results["gemini"].confidence == 0.9
+
+    def test_both_providers_receive_the_same_schema(self):
+        context = SelectionContext(hop=0, current_url=HOME)
+        candidates = [make_candidate("/a", "Alpha")]
+        claude_stub, gemini_stub = StubAnthropic(text_response("{}")), StubGemini("{}")
+
+        select_next_link("goal", candidates, set(), context,
+                         llm=ClaudeLLMClient(client=claude_stub))
+        select_next_link("goal", candidates, set(), context,
+                         llm=GeminiLLMClient(client=gemini_stub))
+
+        claude_schema = claude_stub.beta_calls[0]["output_config"]["format"]["schema"]
+        gemini_schema = gemini_stub.configs[0]["response_json_schema"]
+        assert claude_schema == gemini_schema == SELECTION_SCHEMA
+
+    def test_gemini_without_structured_output_still_selects(self):
+        # After a schema rejection Gemini falls back to plain text, which is
+        # precisely when defensive parsing carries the run.
+        stub = StubGemini(
+            text='{"choice": 0, "reasoning": "Alpha it is", "confidence": 0.6}',
+            error=ValueError("Invalid JSON schema supplied"),
+        )
+        context = SelectionContext(hop=0, current_url=HOME)
+        selection = select_next_link(
+            "goal", [make_candidate("/a", "Alpha")], set(), context,
+            llm=GeminiLLMClient(client=stub),
+        )
+        assert selection.label == "Alpha"
+        assert "response_json_schema" not in stub.configs[-1]

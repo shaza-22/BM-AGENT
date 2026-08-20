@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import types
 import sys
 
 import pytest
@@ -182,3 +183,73 @@ def choose_by(*needles: str):
         )
 
     return respond
+
+
+# --------------------------------------------------------------------------
+# LLM provider stubs
+# --------------------------------------------------------------------------
+# A syntactically valid Google API key that is not one. Used to prove a key
+# never reaches an error message, a log line or a repr.
+FAKE_KEY = "AIzaSyFAKE0000000000000000000000000000"
+
+
+def text_response(text: str, *, stop_reason: str = "end_turn"):
+    return types.SimpleNamespace(
+        content=[types.SimpleNamespace(type="text", text=text)],
+        stop_reason=stop_reason,
+        stop_details=None,
+    )
+
+
+class StubAnthropic:
+    """Minimal stand-in exposing both the beta and non-beta create paths."""
+
+    def __init__(self, response=None, beta_error: Exception | None = None):
+        self.response = response or text_response("ok")
+        self.beta_error = beta_error
+        self.beta_calls: list[dict] = []
+        self.calls: list[dict] = []
+        outer = self
+
+        class _Messages:
+            def create(self, **kwargs):
+                outer.calls.append(kwargs)
+                return outer.response
+
+        class _BetaMessages:
+            def create(self, **kwargs):
+                outer.beta_calls.append(kwargs)
+                if outer.beta_error:
+                    raise outer.beta_error
+                return outer.response
+
+        self.messages = _Messages()
+        self.beta = types.SimpleNamespace(messages=_BetaMessages())
+
+
+
+class StubGemini:
+    """Minimal stand-in for google.genai.Client."""
+
+    def __init__(self, text: str = "ok", error: Exception | None = None,
+                 candidates=None, errors_until: int = 0):
+        self.text, self.error = text, error
+        self.candidates = candidates
+        self.errors_until = errors_until
+        self.configs: list[object] = []
+        outer = self
+
+        class _Models:
+            def generate_content(self, *, model, contents, config):
+                outer.configs.append(config)
+                outer.last_model = model
+                outer.last_contents = contents
+                if outer.error and len(outer.configs) <= max(outer.errors_until, 1):
+                    raise outer.error
+                return types.SimpleNamespace(
+                    text=outer.text, candidates=outer.candidates, prompt_feedback=None
+                )
+
+        self.models = _Models()
+
+

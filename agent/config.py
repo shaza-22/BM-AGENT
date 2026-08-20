@@ -42,13 +42,26 @@ MAX_PAGES = 15
 CANDIDATE_LIMIT = 50
 
 # --- Model -----------------------------------------------------------------
-MODEL = "claude-opus-5"
-# Link selection is a judgement call over a short list, not a research task.
-# Low effort keeps adaptive thinking brief. Note: do NOT disable thinking on
-# this model to save tokens -- with thinking off it sometimes writes a tool call
-# into visible text and can leak reasoning tags. Lower the effort instead.
-EFFORT = "low"
-MAX_TOKENS = 4096
+# Which LLMClient implementation agent.llm.make_llm_client() builds.
+PROVIDER = "gemini"  # "gemini" | "claude"
+
+# Both providers read their key from the environment, and agent.llm also loads
+# a .env file at the project root. Only the *names* of these variables appear
+# anywhere in the code or the logs -- never their values.
+GEMINI_API_KEY_ENV = "GEMINI_API_KEY"
+ANTHROPIC_API_KEY_ENV = "ANTHROPIC_API_KEY"
+
+# Gemini. The free tier's usual workhorse; override if your quota differs.
+GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MAX_TOKENS = 4096
+
+# Claude. Link selection is a judgement call over a short list, not a research
+# task, so low effort keeps adaptive thinking brief. Note: do NOT disable
+# thinking on this model to save tokens -- with thinking off it sometimes writes
+# a tool call into visible text and can leak reasoning tags. Lower effort instead.
+CLAUDE_MODEL = "claude-opus-5"
+CLAUDE_EFFORT = "low"
+CLAUDE_MAX_TOKENS = 4096
 # Self-reported LLM confidence is weakly calibrated, so nothing branches on it
 # by default. Raise this to make the navigator treat low-confidence picks as
 # "no candidate".

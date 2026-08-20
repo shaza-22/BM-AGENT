@@ -5,6 +5,12 @@ lxml>=5.0            # faster parser; the stdlib html.parser is used if absent
 pdfplumber>=0.11     # preferred PDF extractor: keeps table columns intact
 pypdf>=4.0           # fallback PDF extractor
 
+# LLM providers. Only the one named by agent.config.PROVIDER is imported at
+# runtime -- both are lazy imports, so the other may be absent.
+google-genai>=1.0        # default provider (agent.config.PROVIDER = "gemini")
+python-dotenv>=1.0       # reads GEMINI_API_KEY from a gitignored .env
+# anthropic>=0.40        # uncomment for PROVIDER = "claude"
+
 # Optional. Only needed for the ~3% of pages that require a browser render.
 # Install the browser too:  playwright install chromium
 # playwright>=1.44

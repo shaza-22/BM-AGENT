@@ -12,7 +12,7 @@ Inputs
       --resolve-on WORD    stand-in validator: resolve when the page text
                            contains WORD (the real validator is a separate
                            deliverable; this only lets a demo run terminate)
-      --max-hops / --max-pages / --log FILE / --model / --effort
+      --provider / --model / --effort / --max-hops / --max-pages / --log FILE
 
 Outputs
     A human-readable trail on stdout, and optionally the JSON Lines step log.
@@ -41,7 +41,7 @@ import time
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from agent import config  # noqa: E402
-from agent.llm import ClaudeLLMClient  # noqa: E402
+from agent.llm import make_llm_client  # noqa: E402
 from agent.navigator import Navigator  # noqa: E402
 from agent.trail_log import StepLogger  # noqa: E402
 from browsing.fetcher import Fetcher  # noqa: E402
@@ -129,8 +129,9 @@ def main() -> int:
     parser.add_argument("--resolve-on", metavar="WORD", help="stand-in validator")
     parser.add_argument("--max-hops", type=int, default=config.MAX_HOPS)
     parser.add_argument("--max-pages", type=int, default=config.MAX_PAGES)
-    parser.add_argument("--model", default=config.MODEL)
-    parser.add_argument("--effort", default=config.EFFORT)
+    parser.add_argument("--provider", default=config.PROVIDER, choices=["gemini", "claude"])
+    parser.add_argument("--model", help="override the provider's default model")
+    parser.add_argument("--effort", help="Claude only: low | medium | high | xhigh | max")
     parser.add_argument("--log", type=pathlib.Path, help="write the JSON Lines step log here")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
@@ -142,9 +143,17 @@ def main() -> int:
 
     validate_fn = make_contains_validator(args.resolve_on) if args.resolve_on else None
 
+    overrides = {}
+    if args.model:
+        overrides["model"] = args.model
+    if args.effort:
+        if args.provider != "claude":
+            parser.error("--effort applies to the Claude provider only")
+        overrides["effort"] = args.effort
+
     stream = args.log.open("w", encoding="utf-8") if args.log else None
     navigator = Navigator(
-        ClaudeLLMClient(model=args.model, effort=args.effort),
+        make_llm_client(args.provider, **overrides),
         fetcher=build_fetcher(args.offline),
         validate_fn=validate_fn,
         step_logger=StepLogger(stream),
@@ -155,6 +164,7 @@ def main() -> int:
     print(f"sub-goal : {args.sub_goal}")
     print(f"seed     : {config.SEED_URL}")
     print(f"mode     : {'offline (saved pages)' if args.offline else 'LIVE SITE'}")
+    print(f"provider : {args.provider}")
     print(f"caps     : {args.max_hops} hops / {args.max_pages} pages")
     print("-" * 78)
 

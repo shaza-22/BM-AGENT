@@ -21,10 +21,13 @@ from typing import Any
 
 _EXPORTS = {
     "SEED_URL": "agent.config",
+    "PROVIDER": "agent.config",
     "LLMClient": "agent.llm",
     "LLMError": "agent.llm",
     "ClaudeLLMClient": "agent.llm",
+    "GeminiLLMClient": "agent.llm",
     "FakeLLMClient": "agent.llm",
+    "make_llm_client": "agent.llm",
     "Candidate": "agent.link_selector",
     "Selection": "agent.link_selector",
     "SelectionContext": "agent.link_selector",
