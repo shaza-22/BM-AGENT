@@ -206,7 +206,10 @@ def main() -> int:
     if args.log:
         print(f"\nstep log written to {args.log}")
 
-    return 0 if result.status in ("resolved", "no_candidates") else 1
+    if result.status == "arrived":
+        print("note     : the navigator reached what it judged to be the destination; "
+              "no validator confirmed the content.")
+    return 0 if result.status in ("resolved", "arrived", "no_candidates") else 1
 
 
 if __name__ == "__main__":

@@ -53,12 +53,15 @@ SELECTION_SCHEMA = {
     "type": "object",
     "properties": {
         "choice": {"type": "integer"},
+        "outcome": {"type": "string", "enum": ["follow", "arrived", "none"]},
         "reasoning": {"type": "string"},
         "confidence": {"type": "number"},
     },
-    "required": ["choice", "reasoning", "confidence"],
+    "required": ["choice", "outcome", "reasoning", "confidence"],
     "additionalProperties": False,
 }
+
+OUTCOMES = ("follow", "arrived", "none")
 
 SYSTEM_PROMPT = """You are the navigation component of a research agent working \
 through a bank's public website. You are given one sub-goal and a numbered list \
@@ -66,18 +69,25 @@ of links found on the pages visited so far. Choose the single link most likely \
 to lead to a page that answers the sub-goal.
 
 Rules:
-- Answer with the NUMBER of a link from the list, or -1 if none of them plausibly \
-lead toward the sub-goal.
+- Answer with the NUMBER of a link from the list, or -1 if no link should be \
+followed, and set "outcome" to one of:
+  * "follow"  - you chose a link (give its number in "choice").
+  * "arrived" - no link would get closer, because the page you are already on \
+appears to be the destination for this sub-goal. You are judging the ROUTE only: \
+you cannot see the page's content, and a separate component decides whether the \
+page actually answers the sub-goal. Say "arrived" when the right move is to stop \
+walking, not when you are confident of the answer.
+  * "none"    - no link leads toward the sub-goal and this website does not \
+appear to cover it. This is correct and expected; do not guess in that case.
 - Prefer a link whose destination would contain the answer over one that merely \
 mentions the topic.
 - Category and list pages are useful stepping stones when no link answers the \
 sub-goal directly.
-- Choosing -1 is correct and expected when the sub-goal concerns something this \
-website does not cover. Do not guess in that case.
 - Explain your choice in one or two sentences. The explanation is shown to a \
 human reviewing the agent's decisions, so state what you expect to find.
 
-Reply with JSON only: {"choice": <int>, "reasoning": "<why>", "confidence": <0-1>}"""
+Reply with JSON only:
+{"choice": <int>, "outcome": "follow"|"arrived"|"none", "reasoning": "<why>", "confidence": <0-1>}"""
 
 
 @dataclass
@@ -122,12 +132,30 @@ class SelectionContext:
 
 @dataclass
 class Selection:
-    """The outcome of one selection step."""
+    """The outcome of one selection step.
+
+    ``outcome`` separates the two meanings that ``url=None`` used to carry:
+
+    ``follow``
+        A link was chosen; ``url`` is set.
+    ``arrived``
+        No link would get closer because the current page appears to be the
+        destination. This is a statement about the *route*, not the page's
+        content -- the selector only ever sees link labels, never page text --
+        so it can never mean "the sub-goal is answered". Only ``validate_fn``
+        decides that.
+    ``none``
+        Nothing here leads toward the sub-goal. Also the default whenever the
+        model omits the field or the reply cannot be parsed, so an unexpected
+        reply degrades to the previous behaviour rather than to a false
+        "we have arrived".
+    """
 
     url: str | None
     label: str | None
     reasoning: str
     confidence: float
+    outcome: str = "none"
     candidate_index: int | None = None
     offered: int = 0
     available: int = 0
@@ -299,6 +327,18 @@ def _coerce_index(value: object) -> int:
     raise ValueError(f"choice is not an integer: {value!r}")
 
 
+def _coerce_outcome(value: object) -> str:
+    """Read the declared outcome, defaulting to "none".
+
+    Anything unrecognised becomes "none" rather than "arrived": mistaking a
+    confused reply for a successful arrival would report a failed run as a
+    finished one.
+    """
+    if isinstance(value, str) and value.strip().lower() in OUTCOMES:
+        return value.strip().lower()
+    return "none"
+
+
 def _coerce_confidence(value: object) -> float:
     try:
         confidence = float(value)  # type: ignore[arg-type]
@@ -334,22 +374,30 @@ def parse_selection(raw: str, ranked: Sequence[Candidate], available: int) -> Se
             label=None,
             reasoning=f"Could not parse the model's reply ({exc}); treating as no candidate.",
             confidence=0.0,
+            outcome="none",
             parse_error=str(exc),
             **base,
         )
 
     reasoning = str(parsed.get("reasoning") or "").strip()
     confidence = _coerce_confidence(parsed.get("confidence"))
+    outcome = _coerce_outcome(parsed.get("outcome"))
 
     if index == -1:
+        default_reasoning = (
+            "The model reported that the current page appears to be the destination."
+            if outcome == "arrived"
+            else "The model reported that no listed link leads toward the sub-goal."
+        )
         return Selection(
             url=None,
             label=None,
             # The reasoning field is a project deliverable and is never allowed
             # to be empty, whatever the model returned.
-            reasoning=reasoning or "The model reported that no listed link leads toward the sub-goal.",
+            reasoning=reasoning or default_reasoning,
             confidence=confidence,
             candidate_index=-1,
+            outcome=outcome,
             **base,
         )
 
@@ -363,6 +411,7 @@ def parse_selection(raw: str, ranked: Sequence[Candidate], available: int) -> Se
                 f"{len(ranked)} offered; treating as no candidate."
             ),
             confidence=0.0,
+            outcome="none",
             parse_error=f"index {index} out of range",
             **base,
         )
@@ -374,6 +423,9 @@ def parse_selection(raw: str, ranked: Sequence[Candidate], available: int) -> Se
         reasoning=reasoning or f"Selected {chosen.label!r} but gave no explanation.",
         confidence=confidence,
         candidate_index=index,
+        # A resolved index is a concrete action, so it wins over a contradictory
+        # declared outcome.
+        outcome="follow",
         **base,
     )
 
@@ -399,6 +451,7 @@ def select_next_link(
             label=None,
             reasoning="No unvisited links remain to choose from.",
             confidence=1.0,
+            outcome="none",
             offered=0,
             available=available,
         )
@@ -427,6 +480,7 @@ def select_next_link(
             ),
             confidence=selection.confidence,
             candidate_index=selection.candidate_index,
+            outcome="none",
             offered=selection.offered,
             available=selection.available,
             raw_response=raw,

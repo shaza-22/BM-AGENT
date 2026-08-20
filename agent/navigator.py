@@ -57,7 +57,9 @@ from browsing.fetcher import Fetcher, PageDict
 
 logger = logging.getLogger(__name__)
 
-NavigationStatus = Literal["resolved", "exhausted", "no_candidates", "blocked", "error"]
+NavigationStatus = Literal[
+    "resolved", "arrived", "exhausted", "no_candidates", "blocked", "error"
+]
 ValidateFn = Callable[[str, PageDict], dict]
 
 
@@ -90,7 +92,28 @@ class TrailStep:
 
 @dataclass
 class NavigationResult:
-    """The outcome of navigating one sub-goal."""
+    """The outcome of navigating one sub-goal.
+
+    ``status`` values:
+
+    ``resolved``
+        ``validate_fn`` confirmed the page answers the sub-goal. This is the
+        only status that makes that claim, and only ``validate_fn`` can produce
+        it -- the link selector never can.
+    ``arrived``
+        Navigation stopped because the selector judged the current page to be
+        the destination, but no validator confirmed it. ``page`` is the page
+        reached, so a caller can still extract from it; ``extracted`` is None.
+        With the stub validator this is the normal outcome of a successful
+        walk. Once a real validator is installed it should become rare, and
+        each occurrence is worth inspecting: it means the navigator believed it
+        had arrived and the validator disagreed.
+    ``no_candidates``
+        Nothing on the pages seen leads toward the sub-goal.
+    ``exhausted`` / ``blocked`` / ``error``
+        A cap was reached, the site returned a WAF block page, or the model
+        could not be reached.
+    """
 
     status: NavigationStatus
     page: PageDict | None
@@ -161,6 +184,13 @@ class Navigator:
         validate_fn: ValidateFn | None = None,
         exclude_urls: Iterable[str] | None = None,
     ) -> NavigationResult:
+        """Walk from the seed to a page that answers ``sub_goal``.
+
+        Only ``validate_fn`` can produce ``status="resolved"``. The selector's
+        strongest claim is ``status="arrived"`` -- it sees link labels, never
+        page content, so it can report that there is nowhere better to go but
+        never that the sub-goal is answered.
+        """
         validate = validate_fn or self._validate_fn or always_unresolved
 
         visited: set[str] = set()
@@ -282,6 +312,7 @@ class Navigator:
                 chosen_url=selection.url,
                 chosen_label=selection.label,
                 candidate_index=selection.candidate_index,
+                outcome=selection.outcome,
                 reasoning=selection.reasoning,
                 confidence=selection.confidence,
                 candidates_offered=selection.offered,
@@ -296,6 +327,16 @@ class Navigator:
                     candidate.times_offered += 1
 
             if selection.url is None:
+                # "arrived" is the selector reporting that the route ends here,
+                # not that the sub-goal is answered -- so the page comes back
+                # for extraction, but extracted stays None and the status is
+                # never "resolved". It needs a page that actually loaded; if the
+                # last fetch failed there is nothing to have arrived at.
+                if selection.outcome == "arrived" and current_page is not None:
+                    return self._finish(
+                        "arrived", current_page, trail, pages_fetched, hops_used, None, sub_goal,
+                        final_reasoning=selection.reasoning,
+                    )
                 return self._finish(
                     "no_candidates", None, trail, pages_fetched, hops_used, None, sub_goal,
                     final_reasoning=selection.reasoning,

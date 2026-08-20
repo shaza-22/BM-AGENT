@@ -43,7 +43,7 @@ tests/               pytest suite, fully offline
 ```bash
 pip install -r requirements.txt
 cp .env.example .env                    # then paste your key into it
-pytest                                  # 263 tests, no network, no API key
+pytest                                  # 312 tests, no network, no API key
 python scripts/save_fixtures.py         # ONE-OFF, hits the live site
 ```
 
@@ -316,6 +316,31 @@ sub-goal, the correct answer is to say so. That returns `no_candidates` with the
 model's reasoning, not a low-confidence guess. Self-reported confidence is
 logged but not gated on by default — it is weakly calibrated — with
 `MIN_CONFIDENCE` available if you want a threshold.
+
+**Arrival and resolution are different claims, and only one component makes
+each.** "No link to follow" used to mean both "nothing here is relevant" and
+"we have arrived, stop walking", so a successful walk reported as a failure. The
+selector now returns `follow` / `arrived` / `none`, and the navigator maps
+`arrived` to its own status.
+
+The precedence is one-way and absolute: **only `validate_fn` can produce
+`resolved`.** The selector sees link labels and URLs, never page content, so
+`arrived` is a statement about the *route* — "there is nowhere better to go from
+here" — and can never assert that the sub-goal is answered. An `arrived` result
+returns the page it reached (so a caller can extract from it) with `extracted`
+left `None`.
+
+Anything unrecognised — an omitted field, an unknown value, an unparseable
+reply — defaults to `none`, never `arrived`: mistaking a confused reply for a
+successful arrival would report a failed run as a finished one. A page with no
+unvisited links left is likewise not assumed to be an arrival, because the
+selector is never consulted there and reporting one would be a guess.
+
+Once a real validator is installed, `arrived` should become rare — and each
+occurrence is worth inspecting, because it means the navigator believed it had
+arrived and the validator disagreed. Those are the highest-value rows in the
+evaluation pipeline, and today they are indistinguishable from genuine dead
+ends.
 
 **A WAF block page aborts the whole run.** The F5 WAF answers HTTP 200 with an
 "Access Denied" page, so `fetch_page` reports `ok=True` and the agent would

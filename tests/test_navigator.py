@@ -70,8 +70,11 @@ def fetcher_for(pages: dict[str, str], **kwargs) -> Fetcher:
     return Fetcher(session=FakeSession(routes), **kwargs)
 
 
-def reply(choice, reasoning="because", confidence=0.8) -> str:
-    return json.dumps({"choice": choice, "reasoning": reasoning, "confidence": confidence})
+def reply(choice, reasoning="because", confidence=0.8, outcome=None) -> str:
+    body = {"choice": choice, "reasoning": reasoning, "confidence": confidence}
+    if outcome is not None:
+        body["outcome"] = outcome
+    return json.dumps(body)
 
 
 def resolve_when(needle: str):
@@ -192,6 +195,107 @@ class TestNoCandidates:
             fetcher=fetcher_for({HOME: page("/a|A"), "https://www.banquemisr.com/a": page()}),
         ).navigate("goal")
         assert result.status == "no_candidates"
+
+
+class TestArrival:
+    """Reaching the destination must not read as a failed run.
+
+    Before this, "none of these links" covered both "nothing here is relevant"
+    and "we have arrived, stop walking", so a successful walk reported
+    no_candidates.
+    """
+
+    def test_arrival_is_its_own_status_and_returns_the_page(self):
+        pages = {HOME: page("/a|Answer", "/b|Other"),
+                 "https://www.banquemisr.com/a": page("/c|Elsewhere", body="the fee schedule")}
+        llm = FakeLLMClient([
+            reply(0, "Answer should be the destination"),
+            reply(-1, "We are on the destination page for this sub-goal", outcome="arrived"),
+        ])
+        result = Navigator(llm, fetcher=fetcher_for(pages)).navigate("find the fees")
+
+        assert result.status == "arrived"
+        assert result.page["url"].endswith("/a")     # available for extraction
+        assert "destination page" in result.final_reasoning
+
+    def test_arrival_never_claims_the_sub_goal_is_answered(self):
+        # One-way precedence: only validate_fn produces "resolved".
+        pages = {HOME: page("/a|Answer", "/b|Other"),
+                 "https://www.banquemisr.com/a": page("/c|Elsewhere", body="content")}
+        llm = FakeLLMClient([reply(0), reply(-1, "we are here", outcome="arrived")])
+        result = Navigator(llm, fetcher=fetcher_for(pages)).navigate("goal")
+
+        assert result.status == "arrived"
+        assert result.status != "resolved"
+        assert result.extracted is None
+
+    def test_a_validator_saying_resolved_still_wins(self):
+        pages = {HOME: page("/a|Answer"), "https://www.banquemisr.com/a": page(body="the answer")}
+        llm = FakeLLMClient([reply(0), reply(-1, "we are here", outcome="arrived")])
+        result = Navigator(
+            llm, fetcher=fetcher_for(pages), validate_fn=resolve_when("the answer")
+        ).navigate("goal")
+
+        assert result.status == "resolved"
+        assert result.extracted == {"url": "https://www.banquemisr.com/a"}
+
+    def test_nothing_relevant_is_still_no_candidates(self):
+        llm = FakeLLMClient([reply(-1, "this site does not cover it", outcome="none")])
+        result = Navigator(llm, fetcher=fetcher_for({HOME: page("/a|A")})).navigate("goal")
+        assert result.status == "no_candidates"
+        assert result.page is None
+
+    def test_an_omitted_outcome_still_means_no_candidates(self):
+        # Absent or unparseable defaults to "none", so an unexpected reply
+        # degrades to the previous behaviour, never to a false arrival.
+        llm = FakeLLMClient([reply(-1, "nothing fits")])
+        result = Navigator(llm, fetcher=fetcher_for({HOME: page("/a|A")})).navigate("goal")
+        assert result.status == "no_candidates"
+
+    def test_arrival_needs_a_page_that_actually_loaded(self):
+        # The seed itself 404s, so there is nothing to have arrived at.
+        llm = FakeLLMClient([reply(-1, "we are here", outcome="arrived")])
+        result = Navigator(llm, fetcher=fetcher_for({})).navigate("goal")
+        assert result.status == "no_candidates"
+        assert result.page is None
+
+    def test_arrival_is_recorded_in_the_step_log(self):
+        # An "arrived" run where the validator disagreed is the highest-value
+        # row in the evaluation pipeline, so the outcome is logged per hop.
+        pages = {HOME: page("/a|Answer", "/b|Other"),
+                 "https://www.banquemisr.com/a": page("/c|Elsewhere", body="content")}
+        navigator = Navigator(
+            FakeLLMClient([reply(0), reply(-1, "here", outcome="arrived")]),
+            fetcher=fetcher_for(pages), step_logger=StepLogger(run_id="r"),
+        )
+        navigator.navigate("goal")
+        outcomes = [r["outcome"] for r in navigator.step_logger.records if r["event"] == "selection"]
+        assert outcomes == ["follow", "arrived"]
+        finished = navigator.step_logger.records[-1]
+        assert finished["status"] == "arrived"
+
+    def test_a_leaf_page_with_no_links_left_is_not_assumed_to_be_an_arrival(self):
+        # With nothing to offer, the selector is never consulted, so there is
+        # no arrival signal to act on. Reporting "arrived" here would be a
+        # guess; the run says plainly that it ran out of links instead.
+        pages = {HOME: page("/a|Answer"), "https://www.banquemisr.com/a": page(body="a leaf")}
+        llm = FakeLLMClient([reply(0)])
+        result = Navigator(llm, fetcher=fetcher_for(pages)).navigate("goal")
+
+        assert result.status == "no_candidates"
+        assert "No unvisited links remain" in result.final_reasoning
+
+    @needs_live
+    def test_arrival_on_a_real_page(self):
+        navigator = Navigator(
+            FakeLLMClient(choose_by("/Pages/Cards", "__stop__")),
+            fetcher=live_fetcher(),
+        )
+        result = navigator.navigate("find the cards section")
+        # choose_by returns choice -1 with no outcome when nothing matches, so
+        # this is the plain no-candidate path on real pages.
+        assert result.status == "no_candidates"
+        assert result.hops_used == 1
 
 
 class TestBacktracking:

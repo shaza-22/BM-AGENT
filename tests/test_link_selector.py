@@ -42,8 +42,11 @@ def make_candidate(path, label="Label", source="body", hop=0, on=HOME, offered=0
     return Candidate(link=link, discovered_on=on, discovered_at_hop=hop, times_offered=offered)
 
 
-def reply(choice, reasoning="because", confidence=0.8):
-    return json.dumps({"choice": choice, "reasoning": reasoning, "confidence": confidence})
+def reply(choice, reasoning="because", confidence=0.8, outcome=None):
+    body = {"choice": choice, "reasoning": reasoning, "confidence": confidence}
+    if outcome is not None:
+        body["outcome"] = outcome
+    return json.dumps(body)
 
 
 class TestScoring:
@@ -290,6 +293,77 @@ class TestParsing:
         # The reasoning field is a project deliverable -- it is shown to a human
         # explaining the agent's choice, so no path may leave it blank.
         assert parse_selection(raw, self.ranked, 2).reasoning.strip()
+
+
+class TestOutcome:
+    def setup_method(self):
+        self.ranked = [make_candidate("/a", "Alpha"), make_candidate("/b", "Beta")]
+
+    def test_a_chosen_link_is_follow(self):
+        assert parse_selection(reply(0, outcome="follow"), self.ranked, 2).outcome == "follow"
+
+    def test_arrived_is_distinct_from_none(self):
+        arrived = parse_selection(
+            reply(-1, "We are already on the page for this sub-goal", outcome="arrived"),
+            self.ranked, 2,
+        )
+        nothing = parse_selection(
+            reply(-1, "This site does not cover share prices", outcome="none"), self.ranked, 2
+        )
+        assert arrived.outcome == "arrived"
+        assert nothing.outcome == "none"
+        # Both still mean "no next hop"; only the reason differs.
+        assert arrived.url is None and nothing.url is None
+
+    def test_a_valid_index_overrides_a_contradictory_outcome(self):
+        # A resolved index is a concrete action and wins.
+        selection = parse_selection(reply(1, outcome="arrived"), self.ranked, 2)
+        assert selection.outcome == "follow"
+        assert selection.label == "Beta"
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            '{"choice": -1, "reasoning": "x", "confidence": 0.5}',            # absent
+            '{"choice": -1, "outcome": "", "reasoning": "x", "confidence": 0.5}',
+            '{"choice": -1, "outcome": "ARRIVED_MAYBE", "reasoning": "x", "confidence": 0.5}',
+            '{"choice": -1, "outcome": 7, "reasoning": "x", "confidence": 0.5}',
+            '{"choice": -1, "outcome": null, "reasoning": "x", "confidence": 0.5}',
+            "not json at all",
+            '{"choice": 99, "outcome": "arrived", "reasoning": "x", "confidence": 0.5}',
+        ],
+    )
+    def test_anything_unrecognised_defaults_to_none(self, raw):
+        # Never "arrived": mistaking a confused reply for a successful arrival
+        # would report a failed run as a finished one.
+        assert parse_selection(raw, self.ranked, 2).outcome == "none"
+
+    def test_outcome_case_and_padding_are_tolerated(self):
+        raw = '{"choice": -1, "outcome": "  Arrived ", "reasoning": "x", "confidence": 0.5}'
+        assert parse_selection(raw, self.ranked, 2).outcome == "arrived"
+
+    def test_arrived_gets_its_own_default_reasoning(self):
+        selection = parse_selection(reply(-1, reasoning="", outcome="arrived"), self.ranked, 2)
+        assert selection.reasoning.strip()
+        assert "destination" in selection.reasoning
+
+    def test_low_confidence_discard_is_not_an_arrival(self, monkeypatch):
+        monkeypatch.setattr(config, "MIN_CONFIDENCE", 0.7)
+        context = SelectionContext(current_url=HOME)
+        llm = FakeLLMClient([reply(0, "unsure", confidence=0.1, outcome="arrived")])
+        selection = select_next_link("goal", [make_candidate("/a")], set(), context, llm=llm)
+        assert selection.outcome == "none"
+
+    def test_running_out_of_links_is_not_an_arrival(self):
+        candidate = make_candidate("/a")
+        selection = select_next_link(
+            "goal", [candidate], {candidate.key}, SelectionContext(), llm=FakeLLMClient([])
+        )
+        assert selection.outcome == "none"
+
+    def test_the_schema_offers_the_three_outcomes(self):
+        assert SELECTION_SCHEMA["properties"]["outcome"]["enum"] == ["follow", "arrived", "none"]
+        assert "outcome" in SELECTION_SCHEMA["required"]
 
 
 class TestSelectNextLink:
