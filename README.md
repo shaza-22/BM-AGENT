@@ -16,6 +16,7 @@ browsing/
   config.py          every tunable: language policy, domain, delays, thresholds
   fetcher.py         Fetcher, fetch_page, robots_allowed, html_to_text, pdf_to_text
   extract_links.py   normalize_url, canonical_key, extract_links, link_label
+  _demo.py           argument handling for the __main__ blocks (not agent API)
 scripts/
   save_fixtures.py   one-off: snapshot live pages into fixtures/live/
 fixtures/
@@ -29,11 +30,25 @@ tests/               pytest suite, fully offline
 
 ```bash
 pip install -r requirements.txt
-pytest                                  # 126 tests, no network
-python -m browsing.extract_links        # dump links from the synthetic fixtures
-python -m browsing.fetcher              # dump text + escalation verdicts
+pytest                                  # 145 tests, no network
 python scripts/save_fixtures.py         # ONE-OFF, hits the live site
 ```
+
+The two inspection blocks read saved pages and never touch the network. Both
+accept a directory, an explicit file, or a glob pattern (handled internally,
+since neither cmd.exe nor PowerShell expands one), and default to the synthetic
+fixtures:
+
+```bash
+python -m browsing.extract_links                          # synthetic fixtures
+python -m browsing.extract_links fixtures/live            # a directory
+python -m browsing.extract_links fixtures/live/index.html # one file
+python -m browsing.fetcher "fixtures/live/*.html"         # a glob
+```
+
+When a `manifest.json` sits beside the fixture, each page is parsed against the
+URL it was actually saved from, so relative hrefs resolve the way they did on
+the live site.
 
 Optional browser rendering, needed for roughly 3% of pages:
 
@@ -131,7 +146,11 @@ reason.
 
 The suite is fully offline: HTTP is served by a fake session, HTML comes from
 inline strings and `fixtures/synthetic/`, and the PDF path runs against a real
-(hand-built) PDF. `fixtures/synthetic/` reproduces each documented site quirk —
+(hand-built) PDF. Fixture filenames differ by directory on purpose:
+`fixtures/synthetic/` is hand-written and named descriptively
+(`homepage.html`), while `fixtures/live/` is named from each page's canonical
+key by `save_fixtures.py` (the homepage becomes `index.html`). Nothing depends
+on a particular filename -- directories are scanned, not looked up. `fixtures/synthetic/` reproduces each documented site quirk —
 the Vue nav, image-only tiles, heading+description links, `csrt` duplicates,
 Arabic markers, footer-only routes, and an SPA shell.
 

@@ -454,22 +454,29 @@ def extract_links(raw_html: str, base_url: str) -> list[LinkDict]:
 if __name__ == "__main__":  # pragma: no cover - manual inspection helper
     # Runs against saved fixtures, never the live site, so this is safe to run
     # in a loop while iterating on the label chain.
+    #
+    #   python -m browsing.extract_links                       # synthetic fixtures
+    #   python -m browsing.extract_links fixtures/live         # a directory
+    #   python -m browsing.extract_links fixtures/live/index.html
+    #   python -m browsing.extract_links "fixtures/live/*.html"
     import pathlib
     import sys
+
+    from browsing._demo import FixtureNotFound, base_url_for, resolve_fixture_paths
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
     root = pathlib.Path(__file__).resolve().parent.parent
-    fixture_dir = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else root / "fixtures" / "synthetic"
-    files = sorted(fixture_dir.glob("*.html"))
-    if not files:
-        print(f"no fixtures in {fixture_dir}; run scripts/save_fixtures.py first")
-        raise SystemExit(1)
+    try:
+        files = resolve_fixture_paths(sys.argv[1:], root / "fixtures" / "synthetic")
+    except FixtureNotFound as exc:
+        print(exc)
+        raise SystemExit(1) from None
 
-    base = "https://www.banquemisr.com/"
     for path in files:
+        base = base_url_for(path, "https://www.banquemisr.com/")
         links = extract_links(path.read_text(encoding="utf-8", errors="replace"), base)
-        print(f"\n=== {path.name}: {len(links)} links ===")
+        print(f"\n=== {path.name}: {len(links)} links (base={base}) ===")
         counts: dict[str, int] = {}
         for link in links:
             counts[link["source"]] = counts.get(link["source"], 0) + 1

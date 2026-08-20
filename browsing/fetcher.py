@@ -740,22 +740,30 @@ def robots_allowed(url: str, session: requests.Session | Fetcher | None = None) 
 
 if __name__ == "__main__":  # pragma: no cover - manual inspection helper
     # Reads saved fixtures, never the live site.
+    #
+    #   python -m browsing.fetcher                       # synthetic fixtures
+    #   python -m browsing.fetcher fixtures/live         # a directory
+    #   python -m browsing.fetcher fixtures/live/index.html
+    #   python -m browsing.fetcher "fixtures/live/*.html"
     import pathlib
     import sys
+
+    from browsing._demo import FixtureNotFound, base_url_for, resolve_fixture_paths
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
     root = pathlib.Path(__file__).resolve().parent.parent
-    fixture_dir = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else root / "fixtures" / "synthetic"
-    files = sorted(fixture_dir.glob("*.html"))
-    if not files:
-        print(f"no fixtures in {fixture_dir}; run scripts/save_fixtures.py first")
-        raise SystemExit(1)
+    try:
+        files = resolve_fixture_paths(sys.argv[1:], root / "fixtures" / "synthetic")
+    except FixtureNotFound as exc:
+        print(exc)
+        raise SystemExit(1) from None
 
     for path in files:
         raw = path.read_text(encoding="utf-8", errors="replace")
+        base = base_url_for(path, "https://www.banquemisr.com/")
         text = html_to_text(raw)
-        count = len(extract_links(raw, "https://www.banquemisr.com/"))
+        count = len(extract_links(raw, base))
         reason = escalation_reason(raw, text, count)
         print(f"\n=== {path.name} ===")
         print(f"  text={len(text)} chars  links={count}  escalate={reason or 'no'}")
