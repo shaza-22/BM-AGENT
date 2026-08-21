@@ -183,6 +183,7 @@ class Navigator:
         sub_goal: str,
         validate_fn: ValidateFn | None = None,
         exclude_urls: Iterable[str] | None = None,
+        familiar_keys: frozenset[str] = frozenset(),
     ) -> NavigationResult:
         """Walk from the seed to a page that answers ``sub_goal``.
 
@@ -190,6 +191,12 @@ class Navigator:
         strongest claim is ``status="arrived"`` -- it sees link labels, never
         page content, so it can report that there is nowhere better to go but
         never that the sub-goal is answered.
+
+        ``familiar_keys`` are pages seen in earlier turns of a conversation.
+        They only nudge the ranking, and only when
+        :data:`agent.config.FOLLOW_UP_PATH_BONUS` is non-zero (it ships at
+        zero). Nothing here can be fetched without first being discovered from
+        the seed this run.
         """
         validate = validate_fn or self._validate_fn or always_unresolved
 
@@ -299,6 +306,7 @@ class Navigator:
                 current_url=current_page["url"] if current_page else None,
                 trail=[f"{s.label or 'start'} -> {s.url}" for s in trail],
                 alias_visited=frozenset(alias_visited),
+                familiar_keys=familiar_keys,
                 limit=self._candidate_limit,
             )
 

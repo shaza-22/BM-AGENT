@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Banque Misr Research Assistant</title>
+<style>
+  :root {
+    --bg:#f6f7f9; --panel:#fff; --ink:#16191d; --muted:#5b636e; --line:#e3e6ea;
+    --accent:#5a3fd6; --ok:#1a7f4b; --warn:#8a6100; --warn-bg:#fdf6e3; --bad:#a32626;
+    --nav:#e8eaf6; --body:#e6f4ea; --footer:#fdece8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14161a; --panel:#1c1f25; --ink:#e9ecf1; --muted:#9aa3b0; --line:#2b3038;
+            --accent:#a595f5; --ok:#57c78c; --warn:#e0b352; --warn-bg:#2a2416; --bad:#f08a8a;
+            --nav:#252a44; --body:#1d3327; --footer:#3a2422; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif; }
+  .wrap { max-width:860px; margin:0 auto; padding:28px 20px 80px; }
+  h1 { font-size:19px; margin:0 0 2px; }
+  .sub { color:var(--muted); font-size:13px; margin-bottom:22px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px; }
+  form { display:flex; gap:8px; }
+  input[type=text] { flex:1; padding:11px 13px; font-size:15px; color:var(--ink);
+    background:var(--panel); border:1px solid var(--line); border-radius:8px; }
+  input[type=text]:focus { outline:2px solid var(--accent); outline-offset:-1px; }
+  button { padding:11px 18px; font-size:15px; font-weight:600; color:#fff; background:var(--accent);
+    border:0; border-radius:8px; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:default; }
+  .interpreting { margin-top:12px; padding:10px 12px; background:var(--warn-bg);
+    border-left:3px solid var(--warn); border-radius:0 6px 6px 0; font-size:13.5px; }
+  .interpreting b { font-weight:600; }
+  .hop { border-top:1px solid var(--line); padding:13px 0; }
+  .hop:first-child { border-top:0; }
+  .hopline { display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; }
+  .num { color:var(--muted); font-variant-numeric:tabular-nums; font-size:12.5px; min-width:38px; }
+  .label { font-weight:600; }
+  .badge { font-size:11px; text-transform:uppercase; letter-spacing:.04em; padding:2px 7px;
+    border-radius:20px; color:var(--ink); }
+  .badge.nav{background:var(--nav)} .badge.body{background:var(--body)} .badge.footer{background:var(--footer)}
+  /* The reasoning is the point of the whole screen: it is what shows the agent
+     deciding rather than a script running. */
+  .why { margin-top:6px; padding-left:46px; color:var(--ink); font-size:14px; }
+  .meta { margin-top:4px; padding-left:46px; color:var(--muted); font-size:12.5px;
+    font-variant-numeric:tabular-nums; word-break:break-all; }
+  .verdict { padding:14px 16px; border-radius:10px; border:1px solid var(--line); }
+  .verdict h2 { font-size:15px; margin:0 0 4px; }
+  .verdict p { margin:0; font-size:14px; }
+  .v-ok    { border-left:4px solid var(--ok); }
+  .v-warn  { border-left:4px solid var(--warn); background:var(--warn-bg); }
+  .v-none  { border-left:4px solid var(--muted); }
+  .v-bad   { border-left:4px solid var(--bad); }
+  .caveat { margin-top:6px; font-size:13px; color:var(--muted); }
+  ul.sources { margin:8px 0 0; padding-left:20px; font-size:13.5px; word-break:break-all; }
+  ul.sources a { color:var(--accent); }
+  .timing { margin-top:10px; font-size:12.5px; color:var(--muted); font-variant-numeric:tabular-nums; }
+  .spin { display:inline-block; width:9px; height:9px; border-radius:50%; background:var(--accent);
+    animation:p 1s ease-in-out infinite; margin-right:7px; }
+  @keyframes p { 0%,100%{opacity:.25} 50%{opacity:1} }
+  .status { color:var(--muted); font-size:13px; }
+  h3 { font-size:13px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted);
+       margin:0 0 10px; font-weight:600; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Banque Misr Research Assistant</h1>
+  <div class="sub">Navigates the live site from the homepage. Every step is the agent's own choice.</div>
+
+  <div class="panel">
+    <form id="form">
+      <input id="task" type="text" autocomplete="off"
+             placeholder="e.g. Find the annual fee of the classic credit card" required>
+      <button id="go" type="submit">Run</button>
+    </form>
+    <div id="interpreting" class="interpreting" hidden></div>
+    <div id="status" class="status" hidden></div>
+  </div>
+
+  <div class="panel" id="hopsPanel" hidden>
+    <h3>Navigation</h3>
+    <div id="hops"></div>
+  </div>
+
+  <div id="final"></div>
+</div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+let sessionId = null, es = null, pollTimer = null, seenHops = 0;
+
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
+  ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
+
+// Every terminal status gets its own voice. "arrived" is deliberately not
+// styled or worded as success: nothing has verified the page's content, and
+// presenting it as an answer would be the single most misleading thing the UI
+// could do.
+const VERDICTS = {
+  resolved:      { cls:"v-ok",   title:"Answered",
+                   caveat:"A validator confirmed this page answers the request." },
+  arrived:       { cls:"v-warn", title:"Reached what looks like the destination",
+                   caveat:"Content not yet verified — the agent judged the route, not the page. No validator has checked that this page actually answers the request." },
+  no_candidates: { cls:"v-none", title:"Couldn't find it",
+                   caveat:"Nothing on the pages reached led toward this request. The site may not cover it." },
+  exhausted:     { cls:"v-none", title:"Couldn't find it",
+                   caveat:"The agent ran out of budget before reaching an answer." },
+  blocked:       { cls:"v-bad",  title:"The site blocked the request",
+                   caveat:"An access-denied page was returned. The run stopped rather than risk a ban." },
+  error:         { cls:"v-bad",  title:"The run failed",  caveat:"" },
+};
+
+function setBusy(busy, note) {
+  $("go").disabled = busy;
+  $("status").hidden = !note;
+  $("status").innerHTML = busy && note ? `<span class="spin"></span>${esc(note)}` : esc(note || "");
+}
+
+function reset() {
+  $("hops").innerHTML = ""; $("hopsPanel").hidden = true;
+  $("final").innerHTML = ""; $("interpreting").hidden = true;
+  seenHops = 0;
+  if (es) { es.close(); es = null; }
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+}
+
+function showResolved(d) {
+  if (!d.used_context || d.sub_goal === d.task) return;
+  $("interpreting").hidden = false;
+  $("interpreting").innerHTML =
+    `<b>Interpreting as:</b> ${esc(d.sub_goal)}<div class="caveat">${esc(d.reasoning)}</div>`;
+}
+
+function addHop(d) {
+  if (d.hop < seenHops) return;              // poll fallback may resend
+  seenHops = d.hop + 1;
+  $("hopsPanel").hidden = false;
+  const badge = d.source ? `<span class="badge ${esc(d.source)}">${esc(d.source)}</span>` : "";
+  const label = d.hop === 0 ? "Starting page" : esc(d.label || "(unlabelled link)");
+  const el = document.createElement("div");
+  el.className = "hop";
+  el.innerHTML =
+    `<div class="hopline"><span class="num">hop ${d.hop}</span>` +
+    `<span class="label">${label}</span>${badge}</div>` +
+    `<div class="why">${esc(d.reasoning)}</div>` +
+    `<div class="meta">${esc(d.url)} · ${d.status} · ${d.links_found} links` +
+    (d.hop > 0 ? ` · ${d.candidates_offered}/${d.candidates_available} candidates` +
+                 ` · confidence ${Number(d.confidence).toFixed(2)}` : "") + `</div>`;
+  $("hops").appendChild(el);
+}
+
+function showDone(d) {
+  const v = VERDICTS[d.status] || VERDICTS.error;
+  const t = d.timing || {};
+  const secs = (k) => Number(t[k] || 0).toFixed(1);
+  const sources = (d.sources || []).map(
+    (u) => `<li><a href="${esc(u)}" target="_blank" rel="noopener">${esc(u)}</a></li>`).join("");
+  $("final").innerHTML =
+    `<div class="panel verdict ${v.cls}">` +
+      `<h2>${esc(v.title)}</h2>` +
+      `<p>${esc(d.final_reasoning || "")}</p>` +
+      (v.caveat ? `<div class="caveat">${esc(v.caveat)}</div>` : "") +
+      (d.page_url ? `<div class="caveat">Page reached: <a href="${esc(d.page_url)}" ` +
+                    `target="_blank" rel="noopener">${esc(d.page_url)}</a></div>` : "") +
+      `<div class="timing">${d.hops_used} hops · ${d.pages_fetched} pages · ` +
+        `total ${secs("total_s")}s (model ${secs("llm_s")}s · ` +
+        `requests ${secs("page_request_s")}s · pdf ${secs("pdf_text_s")}s · ` +
+        `pacing ${secs("page_rate_limit_wait_s")}s)</div>` +
+    `</div>` +
+    (sources ? `<div class="panel"><h3>Sources visited</h3><ul class="sources">${sources}</ul></div>` : "");
+  setBusy(false, "");
+}
+
+function showError(d) {
+  const v = VERDICTS[d.kind === "blocked" ? "blocked" : "error"];
+  $("final").innerHTML =
+    `<div class="panel verdict ${v.cls}"><h2>${esc(v.title)}</h2>` +
+    `<p>${esc(d.message)}</p></div>`;
+  setBusy(false, "");
+}
+
+function finish() {
+  if (es) { es.close(); es = null; }
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+}
+
+// Poll fallback: used when EventSource never connects or drops mid-run. The
+// status endpoint accumulates everything the stream emitted, so replaying it
+// is safe -- addHop ignores hops already on screen.
+function startPolling(taskId) {
+  if (pollTimer) return;
+  setBusy(true, "Live updates unavailable — polling for progress…");
+  pollTimer = setInterval(async () => {
+    let r;
+    try { r = await fetch(`/api/tasks/${taskId}`); } catch { return; }
+    if (r.status === 404) {
+      finish();
+      showError({ kind:"internal", message:"This run was lost — the server restarted." });
+      return;
+    }
+    const s = await r.json();
+    if (s.sub_goal) showResolved({ ...s, task: s.task });
+    (s.hops || []).forEach(addHop);
+    if (s.state === "done" && s.result) { finish(); showDone(s.result); }
+    if (s.state === "error" && s.error) { finish(); showError(s.error); }
+  }, 1000);
+}
+
+function stream(taskId) {
+  let sawAny = false;
+  es = new EventSource(`/api/tasks/${taskId}/stream`);
+  es.addEventListener("resolved", (e) => { sawAny = true; showResolved(JSON.parse(e.data)); });
+  es.addEventListener("hop",      (e) => { sawAny = true; addHop(JSON.parse(e.data)); });
+  es.addEventListener("queued",   (e) => {
+    sawAny = true;
+    const p = JSON.parse(e.data).position;
+    setBusy(true, `Queued behind ${p} run${p === 1 ? "" : "s"} — only a couple run at once, to stay polite to the site.`);
+  });
+  es.addEventListener("done",  (e) => { finish(); showDone(JSON.parse(e.data)); });
+  es.addEventListener("error_event", (e) => { finish(); showError(JSON.parse(e.data)); });
+  es.addEventListener("error", (e) => {
+    // Fires both for a server-sent "error" event and for a transport drop.
+    if (e.data) { finish(); showError(JSON.parse(e.data)); return; }
+    if (es) { es.close(); es = null; }
+    startPolling(taskId);                     // transport failed; keep going
+  });
+  setTimeout(() => { if (!sawAny) startPolling(taskId); }, 4000);
+}
+
+async function ensureSession() {
+  if (sessionId) return sessionId;
+  const r = await fetch("/api/sessions", { method:"POST" });
+  sessionId = (await r.json()).session_id;
+  return sessionId;
+}
+
+async function submit(task) {
+  reset();
+  setBusy(true, "Starting from the homepage…");
+  const sid = await ensureSession();
+  let r = await fetch("/api/tasks", {
+    method:"POST", headers:{ "Content-Type":"application/json" },
+    body: JSON.stringify({ task, session_id: sid }),
+  });
+  if (r.status === 404) {
+    // The session expired or the server restarted: start a fresh conversation
+    // and say so, rather than silently losing the follow-up context.
+    sessionId = null;
+    const fresh = await ensureSession();
+    setBusy(true, "Previous conversation expired — starting a new one.");
+    r = await fetch("/api/tasks", {
+      method:"POST", headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({ task, session_id: fresh }),
+    });
+  }
+  if (!r.ok) {
+    const detail = await r.json().catch(() => ({}));
+    showError({ kind:"internal", message: detail.detail || `Request failed (${r.status}).` });
+    return;
+  }
+  const { task_id } = await r.json();
+  setBusy(true, "Navigating — this usually takes 5–30 seconds.");
+  stream(task_id);
+}
+
+$("form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const task = $("task").value.trim();
+  if (!task) return;
+  $("task").value = "";
+  // The box doubles as the follow-up box: the session id persists, so the next
+  // request is another turn in the same conversation.
+  $("task").placeholder = "Follow up — e.g. what about the second one?";
+  submit(task);
+});
+</script>
+</body>
+</html>

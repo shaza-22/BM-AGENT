@@ -1,14 +1,17 @@
-# Banque Misr Agentic Research Assistant — Browsing & Navigation
-
-Two layers of the agent live here:
+# Banque Misr Agentic Research Assistant — Browsing, Navigation & Interface
 
 - **`browsing/`** — perception. `fetcher.py` (how the agent sees a page) and
   `extract_links.py` (how it sees where it can go next).
-- **`agent/`** — navigation. `link_selector.py` (which link to follow, and why)
-  and `navigator.py` (the loop from the homepage to the answering page).
+- **`agent/`** — navigation. `link_selector.py` (which link to follow, and why),
+  `navigator.py` (the loop from the homepage to the answering page), and
+  `session.py` (conversation memory, so follow-ups work).
+- **`api/` + `frontend/`** — a thin HTTP layer over `navigate()` and a
+  single-page UI that shows each hop and its reasoning as it happens.
 
-Planning, content extraction, validation and synthesis sit above these and are
-built separately.
+Planning a task into sub-goals, validating a page, extracting fields and
+synthesising an answer sit above these and are built separately. `validate_fn`
+is still a stub here, and the API injects it, so that work drops in without
+reshaping anything.
 
 The agent gets one seed URL and a task, and navigates the live site itself.
 There is no pre-built index and no crawler; every task starts fresh from the
@@ -24,10 +27,18 @@ browsing/
   _demo.py           argument handling for the __main__ blocks (not agent API)
 agent/
   config.py          seed URL, caps, model, ranking weights, WAF markers
+  session.py         Turn/TurnSummary, SessionStore, follow-up resolution
   llm.py             LLMClient protocol, ClaudeLLMClient, FakeLLMClient
   link_selector.py   ranking, prompt, defensive parsing, select_next_link
   navigator.py       the navigation loop -> NavigationResult
   trail_log.py       JSON Lines step log for the frontend and evaluation
+api/
+  app.py             FastAPI routes and the SSE stream
+  runner.py          task registry, worker pool, shared rate limiter
+  events.py          SSE framing
+  schemas.py         the wire format, in one place
+frontend/
+  index.html         the whole UI: no build step, no framework, no npm
 scripts/
   save_fixtures.py   one-off: snapshot live pages into fixtures/live/
   live_navigate.py   watch one sub-goal navigate (demo / smoke check)
@@ -43,7 +54,7 @@ tests/               pytest suite, fully offline
 ```bash
 pip install -r requirements.txt
 cp .env.example .env                    # then paste your key into it
-pytest                                  # 367 tests, no network, no API key
+pytest                                  # 419 tests, no network, no API key
 python scripts/save_fixtures.py         # ONE-OFF, hits the live site
 ```
 
@@ -369,6 +380,92 @@ the minimum cacheable prefix is ~1024, so a breakpoint would silently never hit.
 
 Wall clock matters more than cost for a demo — 5 hops of (1–2s politeness delay
 + fetch + one model call) is **20–35s per sub-goal**.
+
+## The web interface
+
+```bash
+uvicorn api.app:app --host 127.0.0.1 --port 8000
+```
+
+Then open <http://127.0.0.1:8000>. Bound to localhost deliberately: the domain
+allow-list means this cannot be pointed at another host, but an exposed
+endpoint would still let anyone spend the day's model quota and drive traffic
+at a WAF-protected bank from your address.
+
+| endpoint | |
+|---|---|
+| `POST /api/sessions` | start a conversation |
+| `POST /api/tasks` | `{task, session_id?}` → `{task_id, session_id, state}`, returns at once |
+| `GET /api/tasks/{id}/stream` | SSE: `resolved` → `hop`… → `done` \| `error` |
+| `GET /api/tasks/{id}` | the same events accumulated — the poll fallback |
+| `GET /api/health` | liveness, provider, and whether a key is configured (never the key) |
+
+A run takes 5–30s, so progress streams rather than the request hanging. `done`
+or `error` **always** terminates the stream, including on an unhandled
+exception, so a client can never wait forever. If the stream never connects or
+drops, the UI falls back to polling; the status endpoint accumulates everything
+the stream emitted, so replaying it is safe.
+
+Everything is in memory. **If the server restarts, every task id, session and
+in-flight run is lost** — a poll for a pre-restart id returns 404, which the UI
+reports as a lost run rather than a missing one. A client disconnecting does
+not cancel a run; it finishes and waits in the registry until its TTL.
+
+### Concurrency against a WAF
+
+Two mechanisms, because neither is sufficient alone:
+
+- **One `RateLimiter` shared by every run in the process.** It keys per host
+  under a lock, so however many runs are active, requests to banquemisr.com
+  stay at one per 1–2s. A concurrency cap alone would not do this — two runs at
+  one fetch per 1.5s each is one fetch per 0.75s, twice the intended rate.
+- **A worker pool of two.** With a shared limiter and no cap, ten concurrent
+  runs interleave their fetches and all ten take ten times as long. With a cap,
+  the third request queues and is told its position.
+
+Each run still gets its own `Fetcher`: the per-run cache and visited-set belong
+to one task. Runs are blocking, so they execute on the pool rather than the
+event loop, and hand events back through `call_soon_threadsafe` on the loop
+that owns the stream.
+
+## Session memory and follow-ups
+
+`POST /api/tasks` with a `session_id` sends the request through a resolver
+first: an LLM call that rewrites "and the fees for that?" into a standalone
+sub-goal using the earlier turns. Rules-based pronoun matching was rejected —
+it would be brittle and the patterns would encode the site's vocabulary, which
+is the coupling this project avoids everywhere else.
+
+The resolved sub-goal is always surfaced ("Interpreting as: …"), which is the
+real guard: a wrong rewrite is visible rather than silent. A resolver that
+fails, returns nothing, or answers the question instead of rewriting it falls
+back to the raw request with a logged warning, and never blocks a run.
+
+A turn stores a **`TurnSummary`**, not a `NavigationResult`: statuses, source
+URLs, and each hop's label and reasoning. A `NavigationResult` carries a
+`PageDict` with up to 140k characters of text and 300KB of raw HTML, and
+keeping those per turn would both leak memory and dump hundreds of KB into
+anything that serialises a turn. Sessions are bounded by turns, age and count.
+
+### Carrying prior-visited URLs into a follow-up
+
+A follow-up about a page found earlier could skip re-walking the site. There
+are four ways to do that and only one is safe:
+
+| approach | verdict |
+|---|---|
+| seed the frontier with prior URLs | **breaks the central claim** — the agent hops to a page it never discovered this run; that is a small pre-built index |
+| pass them as `exclude_urls` | actively wrong — "and the fees for that?" usually needs to re-read the page the last turn ended on |
+| cache pages across turns | breaks "every task starts live" outright, and serves stale content |
+| **a ranking bonus only** | safe — the link must still be discovered this run from the seed, the model still chooses, the caps still bound the run |
+
+Only the fourth is implemented, and it **ships disabled**
+(`FOLLOW_UP_PATH_BONUS = 0.0`). It is safe, but it buys roughly ten seconds of
+re-walking at the cost of complicating the clearest sentence in the project —
+*no pre-built index, every task navigates live from the homepage* — and it
+would pull a follow-up that is really a topic switch back toward the previous
+topic. Set the constant above zero to enable it; it is gated on `used_context`
+so a self-contained request is never affected.
 
 ## Design decisions
 

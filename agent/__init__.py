@@ -39,6 +39,12 @@ _EXPORTS = {
     "navigate": "agent.navigator",
     "always_unresolved": "agent.navigator",
     "StepLogger": "agent.trail_log",
+    "Resolution": "agent.session",
+    "Session": "agent.session",
+    "SessionStore": "agent.session",
+    "Turn": "agent.session",
+    "TurnSummary": "agent.session",
+    "resolve_task": "agent.session",
 }
 
 __all__ = sorted(_EXPORTS)

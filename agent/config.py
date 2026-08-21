@@ -113,6 +113,19 @@ LLM_OPTIONAL_SETTING_DROP_ORDER: tuple[str, ...] = ("thinking", "schema")
 # amount of backing off inside one run will clear it.
 LLM_DAILY_QUOTA_MARKERS: tuple[str, ...] = ("perday", "per_day", "daily")
 
+# --- Session memory --------------------------------------------------------
+SESSION_MAX_TURNS = 8          # older turns drop out of the resolver's context
+SESSION_TTL_S = 3600           # sessions are in-memory only; this bounds the leak
+SESSION_MAX_SESSIONS = 200     # LRU cap, so a long-running server cannot grow forever
+MAX_TASK_CHARS = 2000          # a task string goes straight into a prompt
+RESOLVER_MAX_SUB_GOAL_CHARS = 400  # longer than this means the model answered, not rewrote
+
+# Score bonus for a link whose page was visited in an earlier turn of the same
+# session. SHIPPED DISABLED -- see the taxonomy in agent/session.py for why.
+# Enabling it is safe (it only reorders links the agent discovered this run),
+# but it complicates the project's central claim for a small saving.
+FOLLOW_UP_PATH_BONUS = 0.0
+
 # --- Candidate ranking weights ---------------------------------------------
 # Additive score; higher is offered sooner. All signals are structural.
 WEIGHT_CURRENT_PAGE = 3.0        # found on the page we are standing on

@@ -128,6 +128,11 @@ class SelectionContext:
     current_url: str | None = None
     trail: Sequence[str] = ()
     alias_visited: frozenset[str] = frozenset()
+    # Pages reached in earlier turns of the same conversation. Only ever a
+    # ranking hint, and only when FOLLOW_UP_PATH_BONUS is non-zero -- see the
+    # taxonomy in agent/session.py. It cannot introduce a link: every candidate
+    # here was still discovered this run by following links from the seed.
+    familiar_keys: frozenset[str] = frozenset()
     limit: int = config.CANDIDATE_LIMIT
 
 
@@ -194,6 +199,9 @@ def score_candidate(candidate: Candidate, context: SelectionContext) -> float:
     alias = alias_key(candidate.url)
     if alias and alias in context.alias_visited:
         score -= config.PENALTY_ALIAS_VISITED
+
+    if config.FOLLOW_UP_PATH_BONUS and candidate.key in context.familiar_keys:
+        score += config.FOLLOW_UP_PATH_BONUS
 
     return score
 
