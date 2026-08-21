@@ -43,7 +43,7 @@ tests/               pytest suite, fully offline
 ```bash
 pip install -r requirements.txt
 cp .env.example .env                    # then paste your key into it
-pytest                                  # 324 tests, no network, no API key
+pytest                                  # 337 tests, no network, no API key
 python scripts/save_fixtures.py         # ONE-OFF, hits the live site
 ```
 
@@ -154,11 +154,44 @@ time     :
   unaccounted               0.0s  (parsing, extraction, validation)
 ```
 
-If `model calls` dominates, the lever is the model — a smaller model, or
-Gemini 2.5's thinking budget. If `model retry backoff` dominates, the endpoint
-is failing and `LLM_MAX_ATTEMPTS` is the knob. Only if `politeness pacing`
-dominates is `DELAY_RANGE_S` worth touching, and on a WAF-protected site it is
-the last thing to cut.
+If `model retry backoff` dominates, the endpoint is failing and
+`LLM_MAX_ATTEMPTS` is the knob. Only if `politeness pacing` dominates is
+`DELAY_RANGE_S` worth touching, and on a WAF-protected site it is the last
+thing to cut. In practice the model dominates — see below.
+
+### Reasoning depth is the dominant cost of a hop
+
+Measured on a two-hop run: **35.6s of 38.7s inside the model**, and at identical
+prompt sizes one call took 3.5s while another took 32.8s. Link selection is a
+model picking one entry from a list of labels — it does not need to reason at
+length, and the difference is most of the run.
+
+Each provider has a knob, and both are in `agent/config.py`:
+
+```python
+GEMINI_THINKING_BUDGET = 0      # 0 turns reasoning off; None lets the model decide
+GEMINI_THINKING_LEVEL = None    # e.g. "low" — newer models take a level, not a budget
+CLAUDE_EFFORT = "low"           # the Claude counterpart, already at the cheap setting
+```
+
+The API changed shape between Gemini generations: older models take a token
+budget, newer ones a level. Whichever is set is sent, and if the API rejects it
+the client logs a warning, drops it for the rest of the run and carries on —
+the same contract as the schema fallback, so an unsupported setting costs the
+speedup and never the call. If your model rejects the budget, set
+`GEMINI_THINKING_LEVEL = "low"` instead.
+
+Claude's counterpart is `effort`, not a thinking switch. *Disabling* thinking on
+that model is deliberately not offered: with thinking off it can write a tool
+call into visible text or leak reasoning tags, so lowering effort is the
+supported way to spend less.
+
+Every call reports itself, so before/after is measurable without a stopwatch:
+
+```
+llm call provider=Gemini model=gemini-3.6-flash ms=3421 thinking=off schema=on
+llm call provider=Claude model=claude-opus-5   ms=2100 effort=low  schema=on
+```
 
 ### Provider differences worth knowing
 

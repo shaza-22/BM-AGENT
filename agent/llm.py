@@ -241,6 +241,13 @@ class ClaudeLLMClient(_TimedClient):
     ``schema`` is passed through as a structured-output constraint, so the
     reply is valid JSON matching it. The selector still parses defensively --
     a different ``LLMClient`` implementation may offer no such guarantee.
+
+    Reasoning depth is controlled by ``effort`` (``CLAUDE_EFFORT``), the
+    counterpart to Gemini's thinking budget. It defaults to ``"low"``, which is
+    already the cheap setting for a task like link selection. Note that
+    *disabling* thinking on this model is not the equivalent move and is not
+    offered: with thinking off it can write a tool call into visible text or
+    leak reasoning tags, so lowering effort is the supported way to spend less.
     """
 
     def __init__(
@@ -302,7 +309,13 @@ class ClaudeLLMClient(_TimedClient):
             request["system"] = system
 
         self.calls += 1
+        started = time.perf_counter()
         response = self._timed(lambda: self._send(client, request))
+        logger.info(
+            "llm call provider=Claude model=%s ms=%d effort=%s schema=%s",
+            self.model, int((time.perf_counter() - started) * 1000), self.effort,
+            "on" if schema is not None else "off",
+        )
 
         if getattr(response, "stop_reason", None) == "refusal":
             details = getattr(response, "stop_details", None)
@@ -366,8 +379,17 @@ def _looks_like_unsupported_parameter(exc: Exception) -> bool:
     return isinstance(exc, TypeError) or "beta" in message or "fallback" in message
 
 
-class _SchemaRejected(Exception):
-    """Internal: the API would not accept the structured-output schema."""
+class _OptionRejected(Exception):
+    """Internal: the API would not accept one of the optional request settings.
+
+    Both structured output and the thinking configuration are best-effort: they
+    make the call better when supported, and must not fail it when not. The
+    client drops whichever the API named and retries once.
+    """
+
+    def __init__(self, option: str, message: str) -> None:
+        super().__init__(message)
+        self.option = option
 
 
 class GeminiLLMClient(_TimedClient):
@@ -389,6 +411,8 @@ class GeminiLLMClient(_TimedClient):
         *,
         model: str = config.GEMINI_MODEL,
         max_tokens: int = config.GEMINI_MAX_TOKENS,
+        thinking_budget: int | None = config.GEMINI_THINKING_BUDGET,
+        thinking_level: str | None = config.GEMINI_THINKING_LEVEL,
         client: Any | None = None,
         api_key_env: str = config.GEMINI_API_KEY_ENV,
         max_attempts: int | None = None,
@@ -396,6 +420,8 @@ class GeminiLLMClient(_TimedClient):
     ) -> None:
         self.model = model
         self.max_tokens = max_tokens
+        self.thinking_budget = thinking_budget
+        self.thinking_level = thinking_level
         self.max_attempts = max_attempts if max_attempts is not None else config.LLM_MAX_ATTEMPTS
         self._sleep = sleep
         self._client = client
@@ -432,18 +458,28 @@ class GeminiLLMClient(_TimedClient):
         client = self._ensure_client()
         self.calls += 1
 
-        if schema is not None and self._structured_output:
+        # At most one attempt per optional setting, plus the bare call.
+        for _ in range(3):
             try:
                 return self._timed(lambda: self._generate(client, prompt, system, schema))
-            except _SchemaRejected as exc:
+            except _OptionRejected as exc:
                 logger.warning(
-                    "Gemini did not accept the response schema (%s); "
-                    "continuing without it and relying on defensive parsing",
-                    exc,
+                    "Gemini did not accept %s (%s); dropping it for the rest of the run",
+                    exc.option, exc,
                 )
-                self._structured_output = False
+                if exc.option == "response schema":
+                    self._structured_output = False
+                else:
+                    self.thinking_budget = None
+                    self.thinking_level = None
 
-        return self._timed(lambda: self._generate(client, prompt, system, None))
+        # Unreachable in practice -- there are only two optional settings, so
+        # the loop always exits by succeeding or raising. Kept so an internal
+        # exception can never escape as one.
+        try:
+            return self._timed(lambda: self._generate(client, prompt, system, schema))
+        except _OptionRejected as exc:
+            raise LLMError(f"Gemini kept rejecting request settings: {exc}") from None
 
     def _generate(
         self, client: Any, prompt: str, system: str | None, schema: dict | None
@@ -455,10 +491,21 @@ class GeminiLLMClient(_TimedClient):
         settings: dict[str, Any] = {"max_output_tokens": self.max_tokens}
         if system:
             settings["system_instruction"] = system
-        if schema is not None:
+
+        used_schema = schema is not None and self._structured_output
+        if used_schema:
             settings["response_mime_type"] = "application/json"
             settings["response_json_schema"] = schema
 
+        thinking: dict[str, Any] = {}
+        if self.thinking_budget is not None:
+            thinking["thinking_budget"] = self.thinking_budget
+        if self.thinking_level is not None:
+            thinking["thinking_level"] = self.thinking_level
+        if thinking:
+            settings["thinking_config"] = thinking
+
+        started = time.perf_counter()
         try:
             response = retry_api_call(
                 lambda: client.models.generate_content(
@@ -470,11 +517,18 @@ class GeminiLLMClient(_TimedClient):
                 on_retry=self._record_retry,
             )
         except LLMError as exc:
-            # A rejected schema is a 400, so it is never retried; it degrades to
-            # plain text instead. Anything else propagates already scrubbed.
-            if schema is not None and not exc.retryable and _looks_like_schema_rejection(str(exc)):
-                raise _SchemaRejected(str(exc)) from None
+            # A refused setting is a 400, so it is never retried; the option is
+            # dropped instead. Anything else propagates, already scrubbed.
+            option = _rejected_option(str(exc), used_schema, bool(thinking)) if not exc.retryable else None
+            if option:
+                raise _OptionRejected(option, str(exc)) from None
             raise
+
+        logger.info(
+            "llm call provider=Gemini model=%s ms=%d thinking=%s schema=%s",
+            self.model, int((time.perf_counter() - started) * 1000),
+            _thinking_label(thinking), "on" if used_schema else "off",
+        )
 
         text = response.text
         if not text:
@@ -482,9 +536,26 @@ class GeminiLLMClient(_TimedClient):
         return text
 
 
-def _looks_like_schema_rejection(message: str) -> bool:
+def _rejected_option(message: str, used_schema: bool, used_thinking: bool) -> str | None:
+    """Which optional setting the API complained about, if any.
+
+    Only settings that were actually sent can be blamed, so an unrelated 400 is
+    never mistaken for one and silently degraded.
+    """
     lowered = message.lower()
-    return "schema" in lowered or "response_mime_type" in lowered
+    if used_thinking and ("thinking" in lowered or "thought" in lowered):
+        return "the thinking configuration"
+    if used_schema and ("schema" in lowered or "response_mime_type" in lowered):
+        return "response schema"
+    return None
+
+
+def _thinking_label(thinking: dict[str, Any]) -> str:
+    if not thinking:
+        return "default"
+    if thinking.get("thinking_budget") == 0:
+        return "off"
+    return ",".join(f"{key.replace('thinking_', '')}={value}" for key, value in thinking.items())
 
 
 def _finish_reason(response: Any) -> str:

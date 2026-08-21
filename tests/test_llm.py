@@ -501,3 +501,112 @@ class TestTimingVisibility:
         assert client.api_seconds > 0.0
         assert client.retries == 0
         assert client.retry_wait_s == 0.0
+
+
+class TestThinkingConfiguration:
+    """Reasoning depth is the dominant cost of a hop.
+
+    Measured on a two-hop run at identical prompt sizes: 3.5s for one call
+    against 32.8s for the other, 35.6s of a 38.7s run inside the model.
+    """
+
+    def test_the_budget_is_sent_when_configured(self):
+        stub = StubGemini("ok")
+        GeminiLLMClient(client=stub, thinking_budget=0).complete("hi")
+        assert stub.configs[0]["thinking_config"] == {"thinking_budget": 0}
+
+    def test_the_level_is_sent_when_configured(self):
+        # Newer models take a level rather than a token budget.
+        stub = StubGemini("ok")
+        GeminiLLMClient(client=stub, thinking_budget=None, thinking_level="low").complete("hi")
+        assert stub.configs[0]["thinking_config"] == {"thinking_level": "low"}
+
+    def test_both_can_be_sent_together(self):
+        stub = StubGemini("ok")
+        GeminiLLMClient(client=stub, thinking_budget=0, thinking_level="low").complete("hi")
+        assert stub.configs[0]["thinking_config"] == {"thinking_budget": 0, "thinking_level": "low"}
+
+    def test_nothing_is_sent_when_unset(self):
+        stub = StubGemini("ok")
+        GeminiLLMClient(client=stub, thinking_budget=None, thinking_level=None).complete("hi")
+        assert "thinking_config" not in stub.configs[0]
+
+    def test_the_default_comes_from_config(self):
+        stub = StubGemini("ok")
+        GeminiLLMClient(client=stub).complete("hi")
+        sent = stub.configs[0].get("thinking_config", {}).get("thinking_budget")
+        assert sent == config.GEMINI_THINKING_BUDGET
+
+    def test_a_rejected_thinking_config_degrades_instead_of_failing(self, caplog):
+        # Same contract as the schema fallback: an unsupported setting must not
+        # cost the call, only the speedup.
+        stub = StubGemini(text="ok", error=ValueError("thinking_budget is not supported"),
+                          errors_until=1)
+        client = GeminiLLMClient(client=stub, thinking_budget=0, sleep=no_sleep)
+        with caplog.at_level(logging.WARNING):
+            assert client.complete("hi") == "ok"
+        assert "thinking_config" in stub.configs[0]
+        assert "thinking_config" not in stub.configs[1]
+        assert "thinking configuration" in caplog.text
+
+    def test_a_rejected_thinking_config_is_remembered(self):
+        stub = StubGemini(text="ok", error=ValueError("thinking_level unsupported"), errors_until=1)
+        client = GeminiLLMClient(client=stub, thinking_budget=0, sleep=no_sleep)
+        client.complete("one")
+        client.complete("two")
+        assert client.thinking_budget is None
+        assert sum(1 for c in stub.configs if "thinking_config" in c) == 1
+
+    def test_schema_and_thinking_degrade_independently(self):
+        stub = StubGemini(text="ok", error=ValueError("Invalid JSON schema supplied"),
+                          errors_until=1)
+        client = GeminiLLMClient(client=stub, thinking_budget=0, sleep=no_sleep)
+        client.complete("hi", schema={"type": "object"})
+        # The schema was dropped; the thinking config was not.
+        assert "response_json_schema" not in stub.configs[1]
+        assert "thinking_config" in stub.configs[1]
+        assert client.thinking_budget == 0
+
+    def test_an_unrelated_400_is_not_blamed_on_an_option(self):
+        error = ValueError("400 INVALID_ARGUMENT: contents must not be empty")
+        stub = StubGemini(text="ok", error=error)
+        client = GeminiLLMClient(client=stub, thinking_budget=0, sleep=no_sleep)
+        with pytest.raises(LLMError):
+            client.complete("hi", schema={"type": "object"})
+        assert client.thinking_budget == 0        # nothing silently disabled
+        assert client._structured_output is True
+
+    def test_a_transient_failure_is_not_mistaken_for_a_rejected_option(self):
+        error = RuntimeError("503 UNAVAILABLE thinking service")
+        error.code = 503
+        stub = StubGemini(text="ok", error=error, errors_until=1)
+        client = GeminiLLMClient(client=stub, thinking_budget=0, sleep=no_sleep)
+        client.complete("hi")
+        assert client.thinking_budget == 0        # retried, not degraded
+        assert client.retries == 1
+
+
+class TestPerCallLogging:
+    def test_gemini_logs_model_duration_and_settings(self, caplog):
+        with caplog.at_level(logging.INFO, logger="agent.llm"):
+            GeminiLLMClient(client=StubGemini("ok"), thinking_budget=0).complete(
+                "hi", schema={"type": "object"}
+            )
+        assert "llm call provider=Gemini" in caplog.text
+        assert "thinking=off" in caplog.text
+        assert "schema=on" in caplog.text
+        assert "ms=" in caplog.text
+
+    def test_gemini_reports_the_default_when_no_budget_is_set(self, caplog):
+        with caplog.at_level(logging.INFO, logger="agent.llm"):
+            GeminiLLMClient(client=StubGemini("ok"), thinking_budget=None).complete("hi")
+        assert "thinking=default" in caplog.text
+
+    def test_claude_logs_the_same_shape_with_its_own_knob(self, caplog):
+        # Both providers report per-call timing the same way; only the name of
+        # the reasoning knob differs.
+        with caplog.at_level(logging.INFO, logger="agent.llm"):
+            ClaudeLLMClient(client=StubAnthropic(text_response("ok"))).complete("hi")
+        assert "llm call provider=Claude" in caplog.text
+        assert f"effort={config.CLAUDE_EFFORT}" in caplog.text
+        assert "ms=" in caplog.text

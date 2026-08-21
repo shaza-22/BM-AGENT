@@ -55,6 +55,19 @@ ANTHROPIC_API_KEY_ENV = "ANTHROPIC_API_KEY"
 GEMINI_MODEL = "gemini-3.6-flash"
 GEMINI_MAX_TOKENS = 4096
 
+# Gemini reasons before answering by default, and link selection does not need
+# it: the model is picking one entry from a list of labels, not solving
+# anything. Measured on a two-hop run, same prompt size both times: 3.5s for the
+# first call against 32.8s for the second, with 35.6s of a 38.7s run spent
+# inside the model. Set to None to let the model decide.
+#
+# Two knobs because the API changed: older models take a token budget (0 turns
+# reasoning off), newer ones take a level. Whichever is set is sent; if the API
+# rejects it, the client logs a warning, drops it and carries on, so a model
+# that supports neither still works.
+GEMINI_THINKING_BUDGET: int | None = 0
+GEMINI_THINKING_LEVEL: str | None = None  # e.g. "low"; try this if the budget is rejected
+
 # Claude. Link selection is a judgement call over a short list, not a research
 # task, so low effort keeps adaptive thinking brief. Note: do NOT disable
 # thinking on this model to save tokens -- with thinking off it sometimes writes
