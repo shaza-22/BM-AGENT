@@ -183,8 +183,13 @@ class Navigator:
             else browsing_config.LANGUAGE_ANY
         )
         self._seed_url = seed_url if seed_url is not None else config.seed_for(self.language)
-        if fetcher is None:
-            self._fetcher.language = self._fetch_language
+        # Set unconditionally, including on a fetcher the caller supplied. The
+        # navigator owns the run's language; a passed-in Fetcher supplies
+        # transport -- session, rate limiter, cache -- not language policy.
+        # Guarding this with `if fetcher is None` meant every real caller
+        # (the API runner and the CLI both pass a fetcher) ran with the
+        # process default, so an Arabic run rejected its own Arabic seed.
+        self._fetcher.language = self._fetch_language
         self._max_hops = max_hops
         self._max_pages = max_pages
         self._candidate_limit = candidate_limit
@@ -237,6 +242,15 @@ class Navigator:
 
         run_started = time.perf_counter()
         nav_link_extract_s = 0.0
+        # A run that cannot fetch its own starting page is a configuration
+        # error, not a dead end, and it should say so rather than reporting
+        # "no candidates" three lines later.
+        if normalize_url(self._seed_url, self._seed_url, language=self._fetch_language) is None:
+            logger.error(
+                "seed %s is rejected by this run's own filters (language=%r, fetch=%r)",
+                self._seed_url, self.language, self._fetch_language,
+            )
+
         pages_fetched = 0
         hops_used = 0
         current_page: PageDict | None = None

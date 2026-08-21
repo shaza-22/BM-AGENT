@@ -142,6 +142,23 @@ def live_routes() -> dict[str, object]:
     for url in list(routes):
         if canonical_key(url) == "banquemisr.com":
             routes.setdefault("https://www.banquemisr.com/", routes[url])
+
+    # fixtures/live/ has no Arabic snapshots yet, so each language seed that is
+    # not already routed falls back to the English homepage. The page content
+    # is not what these tests check -- whether a run can fetch its own starting
+    # page is. Once save_fixtures.py has pulled the Arabic pages this resolves
+    # to the real one automatically.
+    from agent.config import seed_for
+    from browsing import config as browsing_config
+
+    english_home = routes.get("https://www.banquemisr.com/")
+    if english_home is not None:
+        for language in browsing_config.LANGUAGE_URL_TAGS:
+            seed = seed_for(language)
+            if seed not in routes:
+                routes[seed] = FakeResponse(
+                    seed, content=english_home.content, content_type="text/html"
+                )
     return routes
 
 

@@ -351,3 +351,124 @@ class TestAgentMessages:
 
         assert "5" in message("cap_hops", "ar", cap=5)
         assert "15" in message("cap_pages", "en", cap=15)
+
+
+class TestSeedInvariant:
+    """A run must never reject its own starting page.
+
+    This is the invariant the shipped bug violated: seed_for("ar") produced a
+    URL that the same run's normalize_url then refused, so an Arabic run died
+    at hop 0 with "url rejected by normalize_url".
+    """
+
+    @pytest.mark.parametrize("language", sorted(browsing_config.LANGUAGE_URL_TAGS))
+    def test_every_seed_survives_its_own_language_filter(self, language):
+        seed = seed_for(language)
+        assert normalize_url(seed, seed, language=language) is not None, (
+            f"a {language} run would reject its own seed {seed}"
+        )
+
+    @pytest.mark.parametrize("language", sorted(browsing_config.LANGUAGE_URL_TAGS))
+    def test_every_seed_survives_the_permissive_filter(self, language):
+        # What the permissive policy actually passes to the fetcher.
+        seed = seed_for(language)
+        assert normalize_url(seed, seed, language=browsing_config.LANGUAGE_ANY) is not None
+
+    @pytest.mark.parametrize("language", sorted(browsing_config.LANGUAGE_URL_TAGS))
+    def test_a_seed_normalizes_to_itself(self, language):
+        # Not merely accepted: unchanged, or the visited-set would key the seed
+        # differently from the page it fetched.
+        seed = seed_for(language)
+        assert normalize_url(seed, seed, language=language) == seed
+
+    def test_a_seed_is_rejected_by_the_other_language(self):
+        # The mirror image, which is why the bug was possible at all.
+        assert normalize_url(seed_for("ar"), seed_for("ar"), language="en") is None
+
+
+class TestArabicNavigationIntegration:
+    """End to end, built the way the API and the CLI build it.
+
+    The previous tests checked normalize_url and seed_for separately and never
+    together through a navigation, which is why 487 of them passed while the
+    primary Arabic path was broken.
+    """
+
+    def routes(self):
+        from conftest import live_routes
+
+        # live_routes serves every language's seed; see the note there about
+        # fixtures/live/ having no Arabic snapshots yet.
+        return live_routes()
+
+    def navigator(self, language, **kwargs):
+        from agent.navigator import Navigator
+        from browsing.fetcher import Fetcher
+        from conftest import FakeSession
+
+        # A fetcher built by the caller and passed in -- exactly what
+        # api/runner.py and scripts/live_navigate.py do, and the case the
+        # shipped bug missed.
+        fetcher = Fetcher(
+            session=FakeSession(self.routes()), respect_robots=False,
+            delay_range=(0.0, 0.0), allow_playwright=False,
+        )
+        return Navigator(
+            FakeLLMClient(
+                json.dumps({"choice": -1, "outcome": "none",
+                            "reasoning": "لا يوجد رابط مناسب", "confidence": 0.5},
+                           ensure_ascii=False)
+            ),
+            fetcher=fetcher, language=language, **kwargs,
+        )
+
+    def test_an_arabic_run_fetches_its_seed(self):
+        result = self.navigator("ar").navigate("ازاى افتح حساب اسلامي")
+
+        assert result.trail, "the run produced no steps at all"
+        seed_step = result.trail[0]
+        assert seed_step.url == seed_for("ar")
+        # The assertion the old test was missing: not just the right URL, but a
+        # fetch that actually succeeded.
+        assert seed_step.fetch_ok is True, seed_step.validate_reason
+        assert seed_step.fetch_status == 200
+        assert seed_step.links_found > 0
+
+    def test_an_arabic_run_reports_its_language(self):
+        assert self.navigator("ar").navigate("ازاى افتح حساب اسلامي").language == "ar"
+
+    def test_an_english_run_still_fetches_its_seed(self):
+        seed_step = self.navigator("en").navigate("find the cards").trail[0]
+        assert seed_step.url == seed_for("en")
+        assert seed_step.fetch_ok is True
+
+    def test_the_navigator_sets_the_language_on_a_supplied_fetcher(self):
+        # The direct regression: a passed-in Fetcher used to keep the process
+        # default, so the run's language never reached normalize_url.
+        from agent.navigator import Navigator
+        from browsing.fetcher import Fetcher
+
+        fetcher = Fetcher()
+        assert fetcher.language is None
+        navigator = Navigator(FakeLLMClient([]), fetcher=fetcher, language="ar")
+        assert fetcher.language == navigator._fetch_language
+
+    def test_a_rejected_seed_is_reported_as_a_configuration_error(self, caplog):
+        import logging
+
+        from agent.navigator import Navigator
+        from browsing.fetcher import Fetcher
+        from conftest import FakeSession
+
+        fetcher = Fetcher(session=FakeSession({}), respect_robots=False,
+                          delay_range=(0.0, 0.0), allow_playwright=False)
+        navigator = Navigator(
+            FakeLLMClient([]), fetcher=fetcher, language="en",
+            seed_url="https://www.banquemisr.com/?sc_lang=ar-EG",
+        )
+        navigator._fetch_language = "en"   # force the impossible combination
+        with caplog.at_level(logging.ERROR):
+            navigator.navigate("goal")
+        # A run that cannot fetch its own start says so, instead of reporting
+        # "no candidates" three lines later.
+        assert "rejected by this run's own filters" in caplog.text

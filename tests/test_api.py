@@ -218,12 +218,18 @@ class TestLanguage:
         assert client.get(f"/api/tasks/{task_id}").json()["language"] == "ar"
 
     def test_the_language_reaches_the_navigator(self):
-        # An Arabic run must start from the Arabic homepage, not the English one.
+        # An Arabic run must start from the Arabic homepage, not the English
+        # one -- and must actually fetch it. Asserting only the URL passed
+        # while the fetch was being rejected, because a failed fetch still
+        # records the URL it was asked for.
         from agent.config import seed_for
 
         client, _ = build()
         status = run_to_completion(client, "ازاى افتح حساب اسلامي")
-        assert status["hops"][0]["url"] == seed_for("ar")
+        seed_hop = status["hops"][0]
+        assert seed_hop["url"] == seed_for("ar")
+        assert seed_hop["status"] == 200, seed_hop["validate_reason"]
+        assert seed_hop["links_found"] > 0
 
 
 class TestReplayMode:
