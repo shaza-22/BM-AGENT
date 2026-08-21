@@ -41,6 +41,8 @@ class TaskRequest(BaseModel):
     # than discovered to be a problem at the model.
     task: str = Field(min_length=1, max_length=config.MAX_TASK_CHARS)
     session_id: str | None = None
+    # Explicit override; detection from the task's script decides when absent.
+    language: str | None = None
 
 
 class TaskAccepted(BaseModel):
@@ -73,10 +75,15 @@ class ResolvedEvent(BaseModel):
     sub_goal: str
     used_context: bool
     reasoning: str
+    language: str | None = None
+    # True when the events that follow come from a recording rather than a
+    # live navigation. Surfaced so a replay is never passed off as live.
+    replayed: bool = False
 
 
 class DoneEvent(BaseModel):
     status: str
+    language: str | None = None
     cap_hit: str | None = None
     final_reasoning: str = ""
     page_url: str | None = None
@@ -100,6 +107,8 @@ class TaskStatus(BaseModel):
     state: TaskState
     task: str
     sub_goal: str | None = None
+    language: str | None = None
+    replayed: bool = False
     used_context: bool = False
     resolution_reasoning: str | None = None
     queue_position: int | None = None

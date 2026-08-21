@@ -43,6 +43,7 @@ from typing import Sequence
 
 from agent import config
 from agent.llm import LLMClient
+from agent.messages import message
 from browsing.extract_links import LinkDict, alias_key, canonical_key
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,25 @@ SELECTION_SCHEMA = {
 }
 
 OUTCOMES = ("follow", "arrived", "none")
+
+LANGUAGE_NAMES = {"en": "English", "ar": "Arabic"}
+
+
+def reply_language_instruction(language: str | None) -> str:
+    """Tell the model which language to write its free text in.
+
+    Only the free-text fields change: an Arabic-speaking user should not get
+    English explanations of why a link was chosen. The JSON structure -- field
+    names and the outcome enum -- stays English so parsing is unaffected.
+    """
+    name = LANGUAGE_NAMES.get(language or "", "")
+    if not name:
+        return ""
+    return (
+        f"\n\nWrite the \"reasoning\" field in {name}, the language of the request. "
+        f"The JSON field names and the \"outcome\" values stay exactly as given, in English."
+    )
+
 
 SYSTEM_PROMPT = """You are the navigation component of a research agent working \
 through a bank's public website. You are given one sub-goal and a numbered list \
@@ -133,6 +153,9 @@ class SelectionContext:
     # taxonomy in agent/session.py. It cannot introduce a link: every candidate
     # here was still discovered this run by following links from the seed.
     familiar_keys: frozenset[str] = frozenset()
+    # The run's language. Links in another language are ranked below, not
+    # dropped, so content that exists in one language only stays reachable.
+    language: str | None = None
     limit: int = config.CANDIDATE_LIMIT
 
 
@@ -202,6 +225,10 @@ def score_candidate(candidate: Candidate, context: SelectionContext) -> float:
 
     if config.FOLLOW_UP_PATH_BONUS and candidate.key in context.familiar_keys:
         score += config.FOLLOW_UP_PATH_BONUS
+
+    tongue = candidate.link.get("language")
+    if context.language and tongue and tongue != context.language:
+        score -= config.PENALTY_OTHER_LANGUAGE
 
     return score
 
@@ -288,6 +315,9 @@ def build_prompt(sub_goal: str, ranked: Sequence[Candidate], context: SelectionC
 
     for index, candidate in enumerate(ranked):
         marker = " [PDF]" if candidate.link["is_pdf"] else ""
+        tongue = candidate.link.get("language")
+        if context.language and tongue and tongue != context.language:
+            marker += f" [{tongue}]"
         origin = (
             ""
             if context.current_url
@@ -357,7 +387,9 @@ def _coerce_confidence(value: object) -> float:
     return min(1.0, max(0.0, confidence))
 
 
-def parse_selection(raw: str, ranked: Sequence[Candidate], available: int) -> Selection:
+def parse_selection(
+    raw: str, ranked: Sequence[Candidate], available: int, language: str | None = None
+) -> Selection:
     """Turn a model reply into a :class:`Selection`, never raising.
 
     The reply names a candidate by index rather than by URL. A model asked for
@@ -382,7 +414,7 @@ def parse_selection(raw: str, ranked: Sequence[Candidate], available: int) -> Se
         return Selection(
             url=None,
             label=None,
-            reasoning=f"Could not parse the model's reply ({exc}); treating as no candidate.",
+            reasoning=message("parse_failed", language, error=exc),
             confidence=0.0,
             outcome="none",
             parse_error=str(exc),
@@ -394,10 +426,9 @@ def parse_selection(raw: str, ranked: Sequence[Candidate], available: int) -> Se
     outcome = _coerce_outcome(parsed.get("outcome"))
 
     if index == -1:
-        default_reasoning = (
-            "The model reported that the current page appears to be the destination."
-            if outcome == "arrived"
-            else "The model reported that no listed link leads toward the sub-goal."
+        default_reasoning = message(
+            "model_reported_arrived" if outcome == "arrived" else "model_reported_none",
+            language,
         )
         return Selection(
             url=None,
@@ -416,10 +447,7 @@ def parse_selection(raw: str, ranked: Sequence[Candidate], available: int) -> Se
         return Selection(
             url=None,
             label=None,
-            reasoning=(
-                f"The model chose link {index}, which was not on the list of "
-                f"{len(ranked)} offered; treating as no candidate."
-            ),
+            reasoning=message("index_out_of_range", language, index=index, count=len(ranked)),
             confidence=0.0,
             outcome="none",
             parse_error=f"index {index} out of range",
@@ -430,7 +458,7 @@ def parse_selection(raw: str, ranked: Sequence[Candidate], available: int) -> Se
     return Selection(
         url=chosen.url,
         label=chosen.label,
-        reasoning=reasoning or f"Selected {chosen.label!r} but gave no explanation.",
+        reasoning=reasoning or message("no_explanation", language, label=chosen.label),
         confidence=confidence,
         candidate_index=index,
         # A resolved index is a concrete action, so it wins over a contradictory
@@ -459,7 +487,7 @@ def select_next_link(
         return Selection(
             url=None,
             label=None,
-            reasoning="No unvisited links remain to choose from.",
+            reasoning=message("no_links_left", context.language),
             confidence=1.0,
             outcome="none",
             offered=0,
@@ -473,10 +501,11 @@ def select_next_link(
         )
 
     prompt = build_prompt(sub_goal, ranked, context)
+    system = SYSTEM_PROMPT + reply_language_instruction(context.language)
     started = time.perf_counter()
-    raw = llm.complete(prompt, system=SYSTEM_PROMPT, schema=SELECTION_SCHEMA)
+    raw = llm.complete(prompt, system=system, schema=SELECTION_SCHEMA)
     elapsed_ms = int((time.perf_counter() - started) * 1000)
-    selection = parse_selection(raw, ranked, available)
+    selection = parse_selection(raw, ranked, available, context.language)
     selection.elapsed_ms = elapsed_ms
     logger.info(
         "selection hop=%d outcome=%s offered=%d/%d ms=%d",
@@ -491,9 +520,9 @@ def select_next_link(
         return Selection(
             url=None,
             label=None,
-            reasoning=(
-                f"Chose {selection.label!r} with confidence {selection.confidence:.2f}, "
-                f"below the configured minimum of {config.MIN_CONFIDENCE:.2f}."
+            reasoning=message(
+                "below_confidence", context.language, label=selection.label,
+                confidence=selection.confidence, minimum=config.MIN_CONFIDENCE,
             ),
             confidence=selection.confidence,
             candidate_index=selection.candidate_index,

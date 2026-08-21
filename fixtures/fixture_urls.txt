@@ -15,3 +15,16 @@
 /Home/SMEs/Retail%20Banking/Accounts%20And%20Deposits
 /Home/SMEs/Retail%20Banking/Consumer%20Loans
 /Home/Pages/Fees
+
+# --- Arabic ---------------------------------------------------------------
+# Derived from the saved English pages, not guessed: every page links to its
+# own Arabic twin. The Arabic site is NOT a separate path tree -- it is the
+# same paths carrying "?sc_lang=ar-EG", which is why normalize_url preserves
+# that parameter instead of stripping it as tracking.
+/?sc_lang=ar-EG
+/Home/Pages/Fees?sc_lang=ar-EG
+/Home/SMEs/Retail%20Banking/Accounts%20And%20Deposits?sc_lang=ar-EG
+/Home/SMEs/Retail%20Banking/Consumer%20Loans?sc_lang=ar-EG
+/Home/SMEs/Retail%20Banking/Pages/Cards/Credit%20Cards%20List?sc_lang=ar-EG
+/Home/SMEs/Retail%20Banking/Pages/Cards/Credit%20Cards%20Pages/Classic%20Credit%20Cards?sc_lang=ar-EG
+/Home/SMEs/Retail%20Banking/Pages/Cards?sc_lang=ar-EG

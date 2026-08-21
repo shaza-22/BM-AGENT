@@ -196,3 +196,91 @@ class TestConcurrency:
             for _ in stream.iter_lines():
                 pass
         assert registry.get(task_id) is None
+
+
+class TestLanguage:
+    def test_an_arabic_task_is_detected_and_reported(self):
+        client, _ = build()
+        status = run_to_completion(client, "ازاى افتح حساب اسلامي")
+        assert status["language"] == "ar"
+
+    def test_an_english_task_is_detected(self):
+        client, _ = build()
+        assert run_to_completion(client, "find the credit cards")["language"] == "en"
+
+    def test_an_explicit_override_wins_over_detection(self):
+        client, _ = build()
+        response = client.post("/api/tasks", json={"task": "find the cards", "language": "ar"})
+        task_id = response.json()["task_id"]
+        with client.stream("GET", f"/api/tasks/{task_id}/stream") as stream:
+            for _ in stream.iter_lines():
+                pass
+        assert client.get(f"/api/tasks/{task_id}").json()["language"] == "ar"
+
+    def test_the_language_reaches_the_navigator(self):
+        # An Arabic run must start from the Arabic homepage, not the English one.
+        from agent.config import seed_for
+
+        client, _ = build()
+        status = run_to_completion(client, "ازاى افتح حساب اسلامي")
+        assert status["hops"][0]["url"] == seed_for("ar")
+
+
+class TestReplayMode:
+    """A demo must not be able to die on quota mid-presentation."""
+
+    def test_a_run_can_be_recorded_and_replayed(self, tmp_path):
+        client, _ = build(record_dir=tmp_path)
+        original = run_to_completion(client, "find the cards")
+        assert list(tmp_path.glob("*.json")), "expected a recording on disk"
+
+        replay_client, _ = build(replay_dir=tmp_path, replay_delay_s=0.0)
+        replayed = run_to_completion(replay_client, "find the cards")
+
+        assert replayed["replayed"] is True
+        assert replayed["state"] == original["state"]
+        assert [hop["url"] for hop in replayed["hops"]] == [
+            hop["url"] for hop in original["hops"]
+        ]
+
+    def test_a_replay_never_calls_the_model(self, tmp_path):
+        def explode(prompt):
+            raise AssertionError("replay must not reach the model")
+
+        client, _ = build(record_dir=tmp_path)
+        run_to_completion(client, "find the cards")
+
+        replay_client, _ = build(
+            llm_factory=lambda: FakeLLMClient(explode), replay_dir=tmp_path, replay_delay_s=0.0
+        )
+        assert run_to_completion(replay_client, "find the cards")["state"] == "done"
+
+    def test_a_replay_announces_itself(self, tmp_path):
+        client, _ = build(record_dir=tmp_path)
+        run_to_completion(client, "find the cards")
+        replay_client, registry = build(replay_dir=tmp_path, replay_delay_s=0.0)
+        task_id = replay_client.post("/api/tasks", json={"task": "find the cards"}).json()["task_id"]
+        with replay_client.stream("GET", f"/api/tasks/{task_id}/stream") as stream:
+            body = "".join(stream.iter_lines())
+        # Presenting a recording as a live run would undo the honesty the rest
+        # of this project is built on.
+        assert '"replayed": true' in body.replace("\n", "")
+
+    def test_an_unmatched_task_falls_back_to_a_recording(self, tmp_path):
+        client, _ = build(record_dir=tmp_path)
+        run_to_completion(client, "find the cards")
+        replay_client, _ = build(replay_dir=tmp_path, replay_delay_s=0.0)
+        status = run_to_completion(replay_client, "something else entirely")
+        assert status["replayed"] is True
+        assert status["hops"]
+
+    def test_replay_with_no_recordings_falls_through_to_a_live_run(self, tmp_path):
+        client, _ = build(replay_dir=tmp_path, replay_delay_s=0.0)
+        status = run_to_completion(client, "find the cards")
+        assert status["replayed"] is False
+        assert status["state"] in ("done", "error")
+
+    def test_recording_is_off_by_default(self, tmp_path):
+        client, _ = build()
+        run_to_completion(client, "find the cards")
+        assert not list(tmp_path.glob("*.json"))

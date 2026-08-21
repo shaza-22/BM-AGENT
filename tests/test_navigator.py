@@ -137,7 +137,9 @@ class TestResolution:
 
         assert result.status == "resolved"
         assert result.hops_used == 2
-        assert [step.links_found for step in result.trail][0] == 99  # the real homepage
+        # 100, not the 99 of an English-only run: under the permissive policy
+        # the homepage's own Arabic switcher link is now a candidate too.
+        assert [step.links_found for step in result.trail][0] == 100
         assert result.page["url"] == LIST
 
 
@@ -527,7 +529,7 @@ class TestTrailAndLogging:
         selection = next(r for r in navigator.step_logger.records if r["event"] == "selection")
         assert selection["candidates_available"] > selection["candidates_offered"]
         assert selection["candidates_offered"] == agent_config.CANDIDATE_LIMIT
-        assert result.trail[0].links_found == 99
+        assert result.trail[0].links_found == 100
 
 
 class TestTimingBreakdown:

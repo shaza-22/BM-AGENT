@@ -44,6 +44,7 @@ from bs4 import BeautifulSoup
 from bs4.element import Tag
 
 from browsing import config
+from browsing.language import detect_language, script_counts
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,10 @@ class LinkDict(TypedDict):
     key: str
     source: LinkSource
     is_pdf: bool
+    # "en" / "ar", or None when nothing indicates one. Present so a run can
+    # rank the other language below its own instead of dropping it -- content
+    # that exists in one language only must stay reachable.
+    language: str | None
 
 
 # Region detection is a metadata best-effort. It must never drop a link: the
@@ -128,24 +133,68 @@ def _normalize_path(path: str) -> str:
     return quoted or "/"
 
 
+def _is_tracking_param(key: str) -> bool:
+    lowered = key.lower()
+    return lowered in config.TRACKING_PARAMS or lowered.startswith(
+        config.TRACKING_PARAM_PREFIXES
+    )
+
+
 def _filter_query(query: str) -> str:
+    """Drop tracking parameters; keep the language marker when it means something.
+
+    ``sc_lang`` is the one Sitecore parameter that changes what the server
+    returns: the Arabic site is the same paths with ``?sc_lang=ar-EG``. It is
+    stripped only when it names the site's default language, so English URLs
+    still deduplicate; keeping it otherwise is what stops an Arabic URL
+    silently normalising into the English page and collapsing both languages
+    onto one canonical key.
+    """
     if not query:
         return ""
-    kept = [
-        (key, value)
-        for key, value in parse_qsl(query, keep_blank_values=True)
-        if key.lower() not in config.TRACKING_PARAMS
-    ]
+    kept: list[tuple[str, str]] = []
+    for key, value in parse_qsl(query, keep_blank_values=True):
+        if _is_tracking_param(key):
+            continue
+        if key.lower() == config.LANG_PARAM:
+            tag = value.strip().lower()
+            if tag not in config.KNOWN_LANGUAGE_TAGS:
+                continue  # unrecognised value carries no meaning
+            if tag.split("-")[0] == config.SITE_DEFAULT_LANGUAGE:
+                continue  # the default is what you get anyway
+        kept.append((key, value))
     kept.sort()
     return urlencode(kept)
 
 
-def normalize_url(url: str, base_url: str) -> str | None:
+def url_language(url: str) -> str | None:
+    """The language a URL claims, from its marker. ``None`` when unmarked."""
+    parts = urlsplit(url)
+    return _detect_language(parts.path, parts.query)
+
+
+def resolve_language(language: str | None) -> str | None:
+    """Turn a caller's language argument into the filter to apply.
+
+    ``None`` means "use the configured default", read now rather than captured
+    as a default argument, so a per-run override or a test monkeypatch takes
+    effect. :data:`config.LANGUAGE_ANY` means "do not filter at all".
+    """
+    return config.LANGUAGE if language is None else language
+
+
+def normalize_url(url: str, base_url: str, *, language: str | None = None) -> str | None:
     """Resolve, clean and vet a single href.
 
     Returns a fetchable absolute URL, or ``None`` when the link is not a usable
     hop: a non-HTTP scheme, off-domain, a static asset, or marked as a language
-    other than :data:`config.LANGUAGE`.
+    other than the run's.
+
+    ``language`` is the run's language rather than a process-wide constant, so
+    two tasks in different languages can run in the same process. Pass
+    :data:`config.LANGUAGE_ANY` to keep every language -- which is what the
+    permissive cross-language policy does, leaving the ranker to prefer the
+    task's own language rather than making the other one unreachable.
     """
     if not url:
         return None
@@ -175,12 +224,13 @@ def normalize_url(url: str, base_url: str) -> str | None:
     if not _is_allowed_host(host):
         return None
 
-    # Language is checked before parameters are stripped. sc_lang is itself a
-    # stripped parameter, so doing this in the other order would erase the only
-    # evidence that a URL is Arabic and let it through as English.
-    if config.LANGUAGE:
+    # Language is checked before parameters are filtered: sc_lang may be
+    # rewritten below, and doing this in the other order would erase the
+    # evidence that a URL belongs to another language.
+    wanted = resolve_language(language)
+    if wanted and wanted != config.LANGUAGE_ANY:
         tag = _detect_language(parts.path, parts.query)
-        if tag and tag.split("-")[0] != config.LANGUAGE.lower():
+        if tag and tag.split("-")[0] != wanted.lower():
             return None
 
     path = _normalize_path(parts.path)
@@ -404,10 +454,38 @@ def make_soup(raw_html: str) -> BeautifulSoup:
         return BeautifulSoup(raw_html, "html.parser")
 
 
-def extract_links(raw_html: str, base_url: str) -> list[LinkDict]:
-    """Extract every followable link on a page, in document order."""
+def link_language(url: str, label: str) -> str | None:
+    """The language a link belongs to: URL marker first, then label script.
+
+    The site's markers are inconsistent -- plenty of URLs carry none at all --
+    but a link's text is right there and costs nothing to look at. An unmarked
+    URL under an Arabic label is an Arabic page. ``None`` when neither says.
+    """
+    marked = url_language(url)
+    if marked:
+        return marked.split("-")[0]
+    # Counted directly rather than passing default=None: in detect_language,
+    # None means "use the configured default", so it cannot express "nothing to
+    # go on" -- and a label of "2024" must stay unknown, not become English.
+    arabic, latin = script_counts(label)
+    if arabic + latin == 0:
+        return None
+    return detect_language(label)
+
+
+def extract_links(
+    raw_html: str, base_url: str, *, language: str | None = None
+) -> list[LinkDict]:
+    """Extract every followable link on a page, in document order.
+
+    ``language`` is the run's language. Links marked as another language are
+    dropped; pass :data:`config.LANGUAGE_ANY` to keep them and let the ranker
+    decide, which is what the permissive cross-language policy does.
+    """
     if not raw_html:
         return []
+    wanted = resolve_language(language)
+    strict = bool(wanted) and wanted != config.LANGUAGE_ANY
 
     soup = make_soup(raw_html)
     for tag in soup(["script", "style", "noscript", "template"]):
@@ -420,7 +498,7 @@ def extract_links(raw_html: str, base_url: str) -> list[LinkDict]:
     for img in soup.find_all("img", src=True):
         src = img.get("src")
         if isinstance(src, str):
-            normalized = normalize_url(src, base_url)
+            normalized = normalize_url(src, base_url, language=config.LANGUAGE_ANY)
             if normalized:
                 image_keys.add(canonical_key(normalized))
 
@@ -440,7 +518,7 @@ def extract_links(raw_html: str, base_url: str) -> list[LinkDict]:
         if not isinstance(href, str):
             continue
 
-        url = normalize_url(href, base_url)
+        url = normalize_url(href, base_url, language=language)
         if url is None:
             continue
         key = canonical_key(url)
@@ -448,6 +526,11 @@ def extract_links(raw_html: str, base_url: str) -> list[LinkDict]:
             continue
 
         label, origin = _label_with_origin(el, url)
+        tongue = link_language(url, label)
+        if strict and tongue and tongue != wanted:
+            # Only reachable under the strict policy. The label fallback is
+            # what makes it bite on the site's many unmarked URLs.
+            continue
 
         if key in positions:
             # Keep the first occurrence's position and region (document order is
@@ -471,6 +554,7 @@ def extract_links(raw_html: str, base_url: str) -> list[LinkDict]:
                 key=key,
                 source=link_source(el),
                 is_pdf=is_pdf_hint(url),
+                language=tongue,
             )
         )
 

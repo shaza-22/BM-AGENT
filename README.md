@@ -54,7 +54,7 @@ tests/               pytest suite, fully offline
 ```bash
 pip install -r requirements.txt
 cp .env.example .env                    # then paste your key into it
-pytest                                  # 419 tests, no network, no API key
+pytest                                  # 487 tests, no network, no API key
 python scripts/save_fixtures.py         # ONE-OFF, hits the live site
 ```
 
@@ -466,6 +466,75 @@ re-walking at the cost of complicating the clearest sentence in the project —
 would pull a follow-up that is really a topic switch back toward the previous
 topic. Set the constant above zero to enable it; it is gated on `used_context`
 so a self-contained request is never affected.
+
+## Bilingual operation
+
+The site is fully bilingual and some content exists in one language only. A run
+carries a language, chosen per task rather than per process, so two tasks in
+different languages can share one server.
+
+**Detection costs nothing.** The task's script decides: Arabic letters against
+Latin letters, digits and punctuation ignored, Arabic winning above
+`ARABIC_DETECTION_THRESHOLD` (0.30). Below half on purpose — Latin brand names
+inside Arabic questions are common ("BM Wallet ازاى" is 0.33 and is Arabic),
+while Arabic words inside English questions are rare. An explicit `language` on
+the API request or `--language` on the CLI overrides detection. No model
+request is spent on something Unicode already answers.
+
+**`sc_lang` is a meaningful parameter, not tracking.** This was the load-bearing
+fix. Verified on the saved pages: the Arabic site is *not* a separate path tree,
+it is the same paths carrying `?sc_lang=ar-EG`, and every English page links to
+its own Arabic twin that way. `sc_lang` used to be stripped as a Sitecore
+tracking parameter, which meant an Arabic URL normalised into the English page —
+so an Arabic run fetched English content believing it was Arabic — and both
+languages collapsed onto one canonical key, so visiting one marked the other
+visited. It is now stripped only when it names the site's default language.
+
+**A link's language comes from its URL marker, falling back to its label's
+script.** The site's markers are inconsistent; an unmarked URL under an Arabic
+label is an Arabic page, and the label is free to read.
+
+### Cross-language policy: permissive with penalty
+
+Other-language links stay in the frontier, ranked below the run's own by
+`PENALTY_OTHER_LANGUAGE`. `CROSS_LANGUAGE_POLICY = "strict"` drops them instead.
+
+Permissive is the default because **strict fails silently and totally**: content
+that exists in one language only becomes unreachable and the agent reports "not
+found on the Banque Misr website" — a false negative, against the criterion the
+assignment grades as missing-information handling. Claiming something is
+unavailable when it is available is the worst answer there. Permissive fails
+visibly and partially instead: one other-language URL in a source list, plainly
+shown in the trail. It also matches the site's own structure, where a language
+switcher on every page makes crossing a single hop by design, and it is the same
+shape as every other decision here — nav links, alias links and passed-over
+links are all penalised, never dropped.
+
+### Answering in the language asked
+
+The model is instructed to write its `reasoning` in the task's language; the
+JSON field names and the `outcome` enum stay English, so parsing is unaffected.
+The sentences the *code* writes — running out of links, hitting a cap, failing
+to parse a reply — live in `agent/messages.py` with an Arabic variant each. A
+run that explains its successes in Arabic and its failures in English would be
+worse than one that is consistent, and failures are where a user most needs to
+understand what happened. The UI uses `dir="auto"` on labels, reasoning and the
+resolved sub-goal, which is per-string by definition, so one run can hold both
+scripts without flipping the page; URLs and badges stay LTR.
+
+## Demoing without spending quota
+
+The free tier allows about twenty model requests a day and a sub-goal costs
+three or four, so a rehearsal plus a presentation can exceed it.
+
+```bash
+BM_RECORD_DIR=recordings uvicorn api.app:app     # save each finished run
+BM_REPLAY_DIR=recordings uvicorn api.app:app     # serve saved runs, no model calls
+```
+
+A replayed run is announced as one — `replayed: true` on its `resolved` event
+and a badge in the UI. Presenting a recording as a live run would undo the
+honesty the rest of this project is built on.
 
 ## Design decisions
 

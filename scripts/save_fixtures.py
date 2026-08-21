@@ -108,7 +108,9 @@ def save_page(page: dict, out_dir: pathlib.Path) -> dict:
         record["files"].append(text_path.name)
         record["text_chars"] = len(page["text"])
     if page["raw_html"]:
-        record["link_count"] = len(extract_links(page["raw_html"], page["url"]))
+        record["link_count"] = len(
+            extract_links(page["raw_html"], page["url"], language=config.LANGUAGE_ANY)
+        )
     return record
 
 
@@ -124,7 +126,7 @@ def discover_pdf(pages: list[dict]) -> list[str]:
     for page in pages:
         if not page.get("raw_html"):
             continue
-        for link in extract_links(page["raw_html"], page["url"]):
+        for link in extract_links(page["raw_html"], page["url"], language=config.LANGUAGE_ANY):
             if link["is_pdf"] and link["key"] not in seen:
                 seen.add(link["key"])
                 candidates.append(link["url"])
@@ -213,7 +215,13 @@ def main() -> int:
     session = requests.Session()
     limiter = RateLimiter()
     fetcher = Fetcher(
-        session=session, rate_limiter=limiter, allow_playwright=args.allow_playwright
+        session=session,
+        rate_limiter=limiter,
+        allow_playwright=args.allow_playwright,
+        # The URL list holds both languages, so no language filter applies here
+        # -- otherwise every "?sc_lang=ar-EG" entry would be discarded before
+        # it was ever fetched.
+        language=config.LANGUAGE_ANY,
     )
 
     started = time.perf_counter()

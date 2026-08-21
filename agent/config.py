@@ -32,6 +32,43 @@ from __future__ import annotations
 # The only URL in the source tree. Everything else is discovered live.
 SEED_URL = "https://www.banquemisr.com/"
 
+# --- Language --------------------------------------------------------------
+# Whether a run may follow links in the other language.
+#
+#   "penalise" -- other-language links stay in the frontier, ranked below the
+#                 task's own. Chosen because the site is densely interlinked
+#                 (a language switcher sits on every page) and because some
+#                 content exists in one language only. Strict would report
+#                 "not found on the website" for content that is right there
+#                 in the other language -- a false negative, which is the
+#                 worst possible answer for missing-information handling.
+#   "strict"   -- other-language links are dropped in extract_links.
+CROSS_LANGUAGE_POLICY = "penalise"
+
+# Applied to a link whose language differs from the run's. Big enough to keep
+# same-language links on top, small enough that the only route to an answer is
+# still reachable. Sits with the other structural weights below.
+PENALTY_OTHER_LANGUAGE = 1.0
+
+
+def seed_for(language: str | None) -> str:
+    """The starting URL for a run in *language*.
+
+    Derived from the one hardcoded URL rather than adding a second: the Arabic
+    site is the same paths carrying "?sc_lang=ar-EG", so the seed is the
+    homepage plus that marker.
+    """
+    from browsing import config as browsing_config
+
+    if not language or language == browsing_config.SITE_DEFAULT_LANGUAGE:
+        return SEED_URL
+    tag = browsing_config.LANGUAGE_URL_TAGS.get(language)
+    if not tag:
+        return SEED_URL
+    joiner = "&" if "?" in SEED_URL else "?"
+    return f"{SEED_URL}{joiner}{browsing_config.LANG_PARAM}={tag}"
+
+
 # --- Caps ------------------------------------------------------------------
 # Observed depth: homepage -> category -> list -> product detail is 3 hops, and
 # a linked fee PDF adds a 4th, so 5 leaves one spare for a wrong turn.

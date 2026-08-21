@@ -22,7 +22,7 @@
   .sub { color:var(--muted); font-size:13px; margin-bottom:22px; }
   .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px; }
   form { display:flex; gap:8px; }
-  input[type=text] { flex:1; padding:11px 13px; font-size:15px; color:var(--ink);
+  input[type=text] { flex:1; padding:11px 13px; font-size:15px; color:var(--ink); text-align:start;
     background:var(--panel); border:1px solid var(--line); border-radius:8px; }
   input[type=text]:focus { outline:2px solid var(--accent); outline-offset:-1px; }
   button { padding:11px 18px; font-size:15px; font-weight:600; color:#fff; background:var(--accent);
@@ -41,7 +41,12 @@
   .badge.nav{background:var(--nav)} .badge.body{background:var(--body)} .badge.footer{background:var(--footer)}
   /* The reasoning is the point of the whole screen: it is what shows the agent
      deciding rather than a script running. */
-  .why { margin-top:6px; padding-left:46px; color:var(--ink); font-size:14px; }
+  /* dir="auto" is per-string by definition: the browser picks direction from
+     the first strong character, so one run can hold Arabic and English lines
+     without flipping the page. URLs and badges stay explicitly ltr. */
+  .why { margin-top:6px; padding-left:46px; color:var(--ink); font-size:14px; text-align:start; }
+  [dir=auto] { text-align:start; }
+  .meta, .badge, ul.sources { direction:ltr; text-align:left; }
   .meta { margin-top:4px; padding-left:46px; color:var(--muted); font-size:12.5px;
     font-variant-numeric:tabular-nums; word-break:break-all; }
   .verdict { padding:14px 16px; border-radius:10px; border:1px solid var(--line); }
@@ -70,7 +75,7 @@
 
   <div class="panel">
     <form id="form">
-      <input id="task" type="text" autocomplete="off"
+      <input id="task" type="text" autocomplete="off" dir="auto"
              placeholder="e.g. Find the annual fee of the classic credit card" required>
       <button id="go" type="submit">Run</button>
     </form>
@@ -126,11 +131,22 @@ function reset() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
 }
 
+function showReplayBadge(d) {
+  // A recording must never be passed off as a live run.
+  if (!d.replayed) return;
+  const note = document.createElement("div");
+  note.className = "interpreting";
+  note.innerHTML = "<b>Replay:</b> these events come from a saved run, not a live one.";
+  $("final").before(note);
+}
+
 function showResolved(d) {
+  showReplayBadge(d);
   if (!d.used_context || d.sub_goal === d.task) return;
   $("interpreting").hidden = false;
   $("interpreting").innerHTML =
-    `<b>Interpreting as:</b> ${esc(d.sub_goal)}<div class="caveat">${esc(d.reasoning)}</div>`;
+    `<b>Interpreting as:</b> <span dir="auto">${esc(d.sub_goal)}</span>` +
+    `<div class="caveat" dir="auto">${esc(d.reasoning)}</div>`;
 }
 
 function addHop(d) {
@@ -143,8 +159,8 @@ function addHop(d) {
   el.className = "hop";
   el.innerHTML =
     `<div class="hopline"><span class="num">hop ${d.hop}</span>` +
-    `<span class="label">${label}</span>${badge}</div>` +
-    `<div class="why">${esc(d.reasoning)}</div>` +
+    `<span class="label" dir="auto">${label}</span>${badge}</div>` +
+    `<div class="why" dir="auto">${esc(d.reasoning)}</div>` +
     `<div class="meta">${esc(d.url)} · ${d.status} · ${d.links_found} links` +
     (d.hop > 0 ? ` · ${d.candidates_offered}/${d.candidates_available} candidates` +
                  ` · confidence ${Number(d.confidence).toFixed(2)}` : "") + `</div>`;
@@ -160,7 +176,7 @@ function showDone(d) {
   $("final").innerHTML =
     `<div class="panel verdict ${v.cls}">` +
       `<h2>${esc(v.title)}</h2>` +
-      `<p>${esc(d.final_reasoning || "")}</p>` +
+      `<p dir="auto">${esc(d.final_reasoning || "")}</p>` +
       (v.caveat ? `<div class="caveat">${esc(v.caveat)}</div>` : "") +
       (d.page_url ? `<div class="caveat">Page reached: <a href="${esc(d.page_url)}" ` +
                     `target="_blank" rel="noopener">${esc(d.page_url)}</a></div>` : "") +

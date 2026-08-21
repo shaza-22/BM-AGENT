@@ -67,6 +67,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -185,12 +186,20 @@ class Session:
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     last_used: float = field(default_factory=time.monotonic)
     max_turns: int = config.SESSION_MAX_TURNS
+    # Two turns of one conversation can run at once -- the API allows a second
+    # task on the same session_id before the first finishes -- and both would
+    # otherwise append and trim the turn list concurrently.
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def touch(self) -> None:
         self.last_used = time.monotonic()
 
     def add_turn(self, task: str, resolution: Resolution, result: "NavigationResult") -> Turn:
         """Record a finished navigation, keeping only its summary."""
+        with self._lock:
+            return self._add_turn(task, resolution, result)
+
+    def _add_turn(self, task: str, resolution: Resolution, result: "NavigationResult") -> Turn:
         turn = Turn(
             task=task,
             resolved_sub_goal=resolution.sub_goal,
@@ -205,6 +214,11 @@ class Session:
         self.touch()
         return turn
 
+    def snapshot(self) -> tuple[Turn, ...]:
+        """The turns so far, taken atomically."""
+        with self._lock:
+            return tuple(self.turns)
+
     def visited_keys(self) -> frozenset[str]:
         """Canonical keys of pages reached in earlier turns.
 
@@ -213,13 +227,13 @@ class Session:
         docstring for why that ships disabled.
         """
         return frozenset(
-            canonical_key(url) for turn in self.turns for url in turn.summary.sources
+            canonical_key(url) for turn in self.snapshot() for url in turn.summary.sources
         )
 
     def context_lines(self) -> list[str]:
         """The conversation so far, compact enough to put in a prompt."""
         lines: list[str] = []
-        for index, turn in enumerate(self.turns, 1):
+        for index, turn in enumerate(self.snapshot(), 1):
             lines.append(f'Turn {index} request: "{turn.task}"')
             if turn.resolved_sub_goal != turn.task:
                 lines.append(f"  navigated for: {turn.resolved_sub_goal}")

@@ -47,6 +47,25 @@ KNOWN_LANGUAGE_TAGS: frozenset[str] = frozenset(
 # strip it first and an Arabic URL becomes indistinguishable from an English one.
 LANG_PARAM = "sc_lang"
 
+# The language the site serves when no marker is present. Verified on the saved
+# pages: the Arabic site is not a separate path tree, it is "?sc_lang=ar-EG" on
+# the SAME paths, and every English page links to its own Arabic twin that way.
+# So sc_lang is meaningful, not tracking: it is stripped only when it names this
+# language (keeping English URLs deduplicating as before) and preserved
+# otherwise, because dropping it would silently turn an Arabic URL into the
+# English page and collapse both languages onto one canonical key.
+SITE_DEFAULT_LANGUAGE = "en"
+
+# Passed as the `language` argument to say "do not filter by language at all".
+LANGUAGE_ANY = "any"
+
+# How each language is spelled in a URL marker on this site.
+LANGUAGE_URL_TAGS: dict[str, str] = {"en": "en", "ar": "ar-EG"}
+
+# Share of a string's letters that must be Arabic for it to count as Arabic.
+# Below half on purpose -- see browsing/language.py for the reasoning.
+ARABIC_DETECTION_THRESHOLD = 0.30
+
 # --- Domain policy ---------------------------------------------------------
 # Matched as (host == ALLOWED_DOMAIN or host.endswith("." + ALLOWED_DOMAIN)).
 # A plain endswith() would also accept "evil-banquemisr.com", which is an
@@ -115,19 +134,24 @@ TRACKING_PARAMS: frozenset[str] = frozenset(
         "sc_site",
         "sc_mode",
         "sc_itemid",
-        "sc_lang",
         "sc_version",
         "sc_database",
         "sc_device",
-        "utm_source",
-        "utm_medium",
-        "utm_campaign",
-        "utm_term",
-        "utm_content",
         "gclid",
         "fbclid",
+        "msclkid",
+        "igshid",
+        "mc_eid",
+        "_ga",
     }
 )
+
+# Enumerating utm variants is a losing game: utm_id turned up live, and
+# utm_source_platform, utm_creative_format and utm_marketing_tactic all exist.
+# Any parameter with this prefix is tracking. ("ref" is deliberately NOT
+# stripped -- it appears on saved pages and some sites route on it, so removing
+# it could merge genuinely different pages.)
+TRACKING_PARAM_PREFIXES: tuple[str, ...] = ("utm_",)
 
 NON_FETCHABLE_SCHEMES: frozenset[str] = frozenset(
     {"mailto", "tel", "javascript", "data", "file", "sms", "fax", "callto", "whatsapp"}

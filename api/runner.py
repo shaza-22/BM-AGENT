@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import pathlib
 import threading
 import time
 import uuid
@@ -59,6 +60,9 @@ from agent.llm import LLMClient, LLMError, make_llm_client
 from agent.navigator import Navigator, ValidateFn
 from agent.session import Resolution, Session, resolve_task
 from agent.trail_log import StepLogger
+from api.replay import REPLAY_EVENT_DELAY_S, find_recording, save_run
+from browsing import config as browsing_config
+from browsing.language import detect_language
 from api.schemas import DoneEvent, ErrorEvent, HopEvent, ResolvedEvent, TaskStatus
 from browsing.fetcher import Fetcher, RateLimiter
 
@@ -99,6 +103,8 @@ class TaskRecord:
     task_id: str
     session_id: str
     task: str
+    language: str | None = None
+    replayed: bool = False
     state: str = "queued"
     queue_position: int | None = None
     sub_goal: str | None = None
@@ -125,6 +131,8 @@ class TaskRecord:
             state=self.state,  # type: ignore[arg-type]
             task=self.task,
             sub_goal=self.sub_goal,
+            language=self.language,
+            replayed=self.replayed,
             used_context=self.used_context,
             resolution_reasoning=self.resolution_reasoning,
             queue_position=self.queue_position,
@@ -145,12 +153,20 @@ class TaskRegistry:
         fetcher_factory: Callable[[RateLimiter], Fetcher] | None = None,
         max_workers: int = MAX_CONCURRENT_RUNS,
         ttl_s: float = TASK_TTL_S,
+        record_dir: pathlib.Path | None = None,
+        replay_dir: pathlib.Path | None = None,
+        replay_delay_s: float = REPLAY_EVENT_DELAY_S,
     ) -> None:
         self._records: dict[str, TaskRecord] = {}
         self._llm_factory = llm_factory
         self._validate_fn = validate_fn
         self._fetcher_factory = fetcher_factory or (lambda limiter: Fetcher(rate_limiter=limiter))
         self._ttl_s = ttl_s
+        # Recording is always safe; replaying replaces navigation entirely and
+        # is only ever on when a demo asks for it.
+        self._record_dir = record_dir
+        self._replay_dir = replay_dir
+        self._replay_delay_s = replay_delay_s
         self._lock = threading.Lock()
         self._active = 0
         # Shared across every run in the process: this is what keeps the
@@ -189,10 +205,15 @@ class TaskRegistry:
                 del self._records[task_id]
 
     # -- submission --------------------------------------------------------
-    def submit(self, task: str, session: Session) -> TaskRecord:
+    def submit(self, task: str, session: Session, language: str | None = None) -> TaskRecord:
         self._sweep()
         record = TaskRecord(
-            task_id=uuid.uuid4().hex[:12], session_id=session.session_id, task=task
+            task_id=uuid.uuid4().hex[:12],
+            session_id=session.session_id,
+            task=task,
+            # An explicit choice wins; otherwise the task's own script decides,
+            # which costs nothing and keeps a model request for the navigation.
+            language=language or detect_language(task, default=browsing_config.LANGUAGE),
         )
         with self._lock:
             self._records[record.task_id] = record
@@ -210,6 +231,8 @@ class TaskRegistry:
         record.state = "running"
         record.queue_position = None
         try:
+            if self._replay_dir is not None and self._replay(record):
+                return
             llm = self._llm_factory()
             resolution = self._resolve(record, session, llm)
             self._navigate(record, session, llm, resolution)
@@ -221,6 +244,48 @@ class TaskRegistry:
                 self._active -= 1
             if not record.terminal:  # defensive: never leave a stream hanging
                 self._fail(record, "internal", "the run ended without a result")
+            if self._record_dir is not None and not record.replayed:
+                save_run(record.task, record.language, record.task_id,
+                         record.history, self._record_dir)
+
+    def _replay(self, record: TaskRecord) -> bool:
+        """Play a recorded run back through the live event channel.
+
+        Returns False when there is nothing to replay, so the caller falls
+        through to a real navigation.
+        """
+        recording = find_recording(self._replay_dir, record.task)
+        if recording is None:
+            logger.warning("replay mode is on but %s holds no recordings", self._replay_dir)
+            return False
+
+        record.replayed = True
+        for event in recording.get("events", []):
+            name, data = event.get("name"), dict(event.get("data") or {})
+            if name == "resolved":
+                # Marked as a replay on the way out; a recording must never be
+                # presented as a live run.
+                data["replayed"] = True
+                record.sub_goal = data.get("sub_goal")
+                record.used_context = bool(data.get("used_context"))
+                record.resolution_reasoning = data.get("reasoning")
+                record.language = data.get("language") or record.language
+            elif name == "hop":
+                record.hops.append(HopEvent(**data))
+            elif name == "done":
+                record.result = DoneEvent(**data)
+                record.state = "done"
+                record.finished_at = time.monotonic()
+            elif name == "error":
+                record.error = ErrorEvent(**data)
+                record.state = "error"
+                record.finished_at = time.monotonic()
+            self._publish(record, name, data)
+            if self._replay_delay_s:
+                time.sleep(self._replay_delay_s)   # so it reads like a live run
+        if not record.terminal:
+            self._fail(record, "internal", "the recording ended without a result")
+        return True
 
     def _resolve(self, record: TaskRecord, session: Session, llm: LLMClient) -> Resolution:
         resolution = resolve_task(record.task, session, llm)
@@ -236,6 +301,7 @@ class TaskRegistry:
                 sub_goal=resolution.sub_goal,
                 used_context=resolution.used_context,
                 reasoning=resolution.reasoning,
+                language=record.language,
             ).model_dump(),
         )
         return resolution
@@ -273,6 +339,7 @@ class TaskRegistry:
             fetcher=self._fetcher_factory(self._rate_limiter),
             validate_fn=self._validate_fn,
             step_logger=StepLogger(on_record=on_record, run_id=record.task_id),
+            language=record.language,
         )
 
         try:
@@ -295,6 +362,7 @@ class TaskRegistry:
 
         done = DoneEvent(
             status=result.status,
+            language=result.language,
             cap_hit=result.cap_hit,
             final_reasoning=result.final_reasoning,
             page_url=result.page["url"] if result.page else None,

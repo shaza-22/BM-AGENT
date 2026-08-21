@@ -51,8 +51,10 @@ from agent.link_selector import (
     select_next_link,
 )
 from agent.llm import LLMClient, LLMError
+from agent.messages import message
 from agent.trail_log import StepLogger
 from browsing.extract_links import alias_key, canonical_key, extract_links, normalize_url
+from browsing import config as browsing_config
 from browsing.fetcher import Fetcher, PageDict
 
 logger = logging.getLogger(__name__)
@@ -122,6 +124,7 @@ class NavigationResult:
     hops_used: int
     extracted: dict | None
     sub_goal: str = ""
+    language: str | None = None
     cap_hit: Literal["hops", "pages"] | None = None
     final_reasoning: str = ""
     stats: dict[str, Any] = field(default_factory=dict)
@@ -156,7 +159,8 @@ class Navigator:
         fetcher: Fetcher | None = None,
         validate_fn: ValidateFn | None = None,
         step_logger: StepLogger | None = None,
-        seed_url: str = config.SEED_URL,
+        seed_url: str | None = None,
+        language: str | None = None,
         max_hops: int = config.MAX_HOPS,
         max_pages: int = config.MAX_PAGES,
         candidate_limit: int = config.CANDIDATE_LIMIT,
@@ -168,7 +172,19 @@ class Navigator:
         self._fetcher = fetcher if fetcher is not None else Fetcher()
         self._validate_fn = validate_fn
         self._log = step_logger if step_logger is not None else StepLogger()
-        self._seed_url = seed_url
+        # The run's language decides both where it starts and which links it
+        # will consider. Under the permissive policy the fetcher and extractor
+        # keep every language and the ranker prefers this one; under "strict"
+        # the other language is dropped before the model ever sees it.
+        self.language = language if language is not None else browsing_config.LANGUAGE
+        self._fetch_language = (
+            self.language
+            if config.CROSS_LANGUAGE_POLICY == "strict"
+            else browsing_config.LANGUAGE_ANY
+        )
+        self._seed_url = seed_url if seed_url is not None else config.seed_for(self.language)
+        if fetcher is None:
+            self._fetcher.language = self._fetch_language
         self._max_hops = max_hops
         self._max_pages = max_pages
         self._candidate_limit = candidate_limit
@@ -213,6 +229,7 @@ class Navigator:
         self._log.emit(
             "navigation_started",
             sub_goal=sub_goal,
+            language=self.language,
             seed=self._seed_url,
             max_hops=self._max_hops,
             max_pages=self._max_pages,
@@ -235,7 +252,7 @@ class Navigator:
 
             link_started = time.perf_counter()
             links = (
-                extract_links(page["raw_html"], page["url"])
+                extract_links(page["raw_html"], page["url"], language=self._fetch_language)
                 if page["ok"] and page["raw_html"]
                 else []
             )
@@ -249,7 +266,7 @@ class Navigator:
                 # Continuing would hammer a WAF that has already flagged us,
                 # which is how a run becomes a ban. Stop the whole navigation.
                 step = self._make_step(
-                    trail, page, pending, links, False,
+                    trail, self.language, page, pending, links, False,
                     "site returned a WAF block page", pages_fetched, started,
                 )
                 trail.append(step)
@@ -257,14 +274,14 @@ class Navigator:
                 logger.warning("WAF block page detected at %s -- aborting run", page["url"])
                 return self._finish(
                     "blocked", None, trail, pages_fetched, hops_used, None, sub_goal, run_started=run_started, nav_link_extract_s=nav_link_extract_s,
-                    final_reasoning="The site returned an access-denied page; stopping to avoid a ban.",
+                    final_reasoning=message("blocked", self.language),
                 )
 
             verdict = self._validate(validate, sub_goal, page)
             resolved = bool(verdict.get("resolved")) and page["ok"]
 
             step = self._make_step(
-                trail, page, pending, links, resolved,
+                trail, self.language, page, pending, links, resolved,
                 str(verdict.get("reason") or ""), pages_fetched, started,
             )
             trail.append(step)
@@ -289,13 +306,13 @@ class Navigator:
                 return self._finish(
                     "exhausted", None, trail, pages_fetched, hops_used, None, sub_goal, run_started=run_started, nav_link_extract_s=nav_link_extract_s,
                     cap_hit="hops",
-                    final_reasoning=f"Reached the maximum of {self._max_hops} hops without resolving the sub-goal.",
+                    final_reasoning=message("cap_hops", self.language, cap=self._max_hops),
                 )
             if pages_fetched >= self._max_pages:
                 return self._finish(
                     "exhausted", None, trail, pages_fetched, hops_used, None, sub_goal, run_started=run_started, nav_link_extract_s=nav_link_extract_s,
                     cap_hit="pages",
-                    final_reasoning=f"Reached the maximum of {self._max_pages} pages without resolving the sub-goal.",
+                    final_reasoning=message("cap_pages", self.language, cap=self._max_pages),
                 )
 
             context = SelectionContext(
@@ -307,6 +324,7 @@ class Navigator:
                 trail=[f"{s.label or 'start'} -> {s.url}" for s in trail],
                 alias_visited=frozenset(alias_visited),
                 familiar_keys=familiar_keys,
+                language=self.language,
                 limit=self._candidate_limit,
             )
 
@@ -318,7 +336,7 @@ class Navigator:
                 logger.error("link selection failed: %s", exc)
                 return self._finish(
                     "error", None, trail, pages_fetched, hops_used, None, sub_goal, run_started=run_started, nav_link_extract_s=nav_link_extract_s,
-                    final_reasoning=f"The language model could not be reached: {exc}",
+                    final_reasoning=message("llm_unreachable", self.language, error=exc),
                 )
 
             self._log.emit(
@@ -444,6 +462,7 @@ class Navigator:
     @staticmethod
     def _make_step(
         trail: list[TrailStep],
+        language: str | None,
         page: PageDict,
         pending: Selection | None,
         links: Sequence[dict],
@@ -463,7 +482,7 @@ class Navigator:
             source=chosen.source if chosen else None,
             from_url=chosen.discovered_on if chosen else None,
             discovered_at_hop=chosen.discovered_at_hop if chosen else None,
-            reasoning=pending.reasoning if pending else "Starting page for every run (the seed URL).",
+            reasoning=pending.reasoning if pending else message("seed_step", language),
             confidence=pending.confidence if pending else 1.0,
             fetch_ok=page["ok"],
             fetch_status=page["status"],
@@ -528,6 +547,7 @@ class Navigator:
             "navigation_finished",
             sub_goal=sub_goal,
             status=status,
+            language=self.language,
             cap_hit=cap_hit,
             pages_fetched=pages_fetched,
             hops_used=hops_used,
@@ -547,6 +567,7 @@ class Navigator:
             hops_used=hops_used,
             extracted=extracted,
             sub_goal=sub_goal,
+            language=self.language,
             cap_hit=cap_hit,
             final_reasoning=final_reasoning,
             stats=stats,

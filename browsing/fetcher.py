@@ -365,6 +365,7 @@ class Fetcher:
         *,
         allow_playwright: bool = True,
         respect_robots: bool = True,
+        language: str | None = None,
         rate_limiter: RateLimiter | None = None,
         delay_range: tuple[float, float] | None = None,
         timeout: float | None = None,
@@ -378,6 +379,9 @@ class Fetcher:
                 headers.setdefault("Accept-Language", config.LANGUAGE)
         self._allow_playwright = allow_playwright
         self._respect_robots = respect_robots
+        # The run's language, not a process-wide constant, so two tasks in
+        # different languages can share a process. None defers to the config.
+        self.language = language
         self._rate_limiter = rate_limiter or RateLimiter(delay_range)
         self._timeout = timeout if timeout is not None else config.REQUEST_TIMEOUT_S
         self._max_retries = max_retries if max_retries is not None else config.MAX_RETRIES
@@ -430,7 +434,7 @@ class Fetcher:
         so an exception here would cost the whole task.
         """
         started = time.perf_counter()
-        normalized = normalize_url(url, url)
+        normalized = normalize_url(url, url, language=self.language)
         if normalized is None:
             result = self._failure(
                 url, url, 0, "url rejected by normalize_url (off-domain, asset, or wrong language)"
@@ -617,7 +621,7 @@ class Fetcher:
             response.close()
 
         status = response.status_code
-        final_url = normalize_url(str(response.url), url) or url
+        final_url = normalize_url(str(response.url), url, language=self.language) or url
         header = response.headers.get("Content-Type", "")
         kind = self._classify(header, content)
 
@@ -670,7 +674,7 @@ class Fetcher:
         text = html_to_text(raw_html)
         timing.html_parse_s += time.perf_counter() - parse_started
         link_started = time.perf_counter()
-        links = extract_links(raw_html, final_url)
+        links = extract_links(raw_html, final_url, language=self.language)
         timing.link_extract_s += time.perf_counter() - link_started
         raw_html, text, link_count, render_mode = self._maybe_escalate(
             final_url, raw_html, text, len(links)
@@ -713,7 +717,7 @@ class Fetcher:
             return raw_html, text, link_count, "requests"
 
         new_text = html_to_text(rendered)
-        new_count = len(extract_links(rendered, url))
+        new_count = len(extract_links(rendered, url, language=self.language))
         if len(new_text) <= len(text) and new_count <= link_count:
             # A browser render that is no better means the page really is thin,
             # or we hit a bot wall. Keeping the requests result means

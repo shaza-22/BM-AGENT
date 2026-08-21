@@ -45,6 +45,7 @@ from agent.llm import make_llm_client  # noqa: E402
 from agent.navigator import Navigator  # noqa: E402
 from agent.trail_log import StepLogger  # noqa: E402
 from browsing.fetcher import Fetcher  # noqa: E402
+from browsing.language import detect_language  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 LIVE = ROOT / "fixtures" / "live"
@@ -130,6 +131,7 @@ def main() -> int:
     parser.add_argument("--max-hops", type=int, default=config.MAX_HOPS)
     parser.add_argument("--max-pages", type=int, default=config.MAX_PAGES)
     parser.add_argument("--provider", default=config.PROVIDER, choices=["gemini", "claude"])
+    parser.add_argument("--language", help="override the language detected from the task")
     parser.add_argument("--model", help="override the provider's default model")
     parser.add_argument("--effort", help="Claude only: low | medium | high | xhigh | max")
     parser.add_argument("--log", type=pathlib.Path, help="write the JSON Lines step log here")
@@ -152,8 +154,10 @@ def main() -> int:
         overrides["effort"] = args.effort
 
     stream = args.log.open("w", encoding="utf-8") if args.log else None
+    language = args.language or detect_language(args.sub_goal)
     navigator = Navigator(
         make_llm_client(args.provider, **overrides),
+        language=language,
         fetcher=build_fetcher(args.offline),
         validate_fn=validate_fn,
         step_logger=StepLogger(stream),
@@ -162,9 +166,10 @@ def main() -> int:
     )
 
     print(f"sub-goal : {args.sub_goal}")
-    print(f"seed     : {config.SEED_URL}")
+    print(f"seed     : {config.seed_for(language)}")
     print(f"mode     : {'offline (saved pages)' if args.offline else 'LIVE SITE'}")
     print(f"provider : {args.provider}")
+    print(f"language : {language}" + ("" if args.language else " (detected from the task)"))
     print(f"caps     : {args.max_hops} hops / {args.max_pages} pages")
     print("-" * 78)
 

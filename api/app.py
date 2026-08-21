@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import pathlib
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
@@ -77,12 +78,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.registry.shutdown()
 
 
+def _dir_from_env(name: str) -> pathlib.Path | None:
+    value = os.environ.get(name, "").strip()
+    return pathlib.Path(value) if value else None
+
+
 def create_app(
     registry: TaskRegistry | None = None, sessions: SessionStore | None = None
 ) -> FastAPI:
-    """Build the app. Injectable so tests can supply a stubbed registry."""
+    """Build the app. Injectable so tests can supply a stubbed registry.
+
+    Two environment variables support demoing without spending quota:
+    ``BM_RECORD_DIR`` saves each finished run, and ``BM_REPLAY_DIR`` serves
+    saved runs instead of navigating. A replayed run says so in its events.
+    """
     app = FastAPI(title="Banque Misr research assistant", lifespan=lifespan)
-    app.state.registry = registry or TaskRegistry()
+    app.state.registry = registry or TaskRegistry(
+        record_dir=_dir_from_env("BM_RECORD_DIR"),
+        replay_dir=_dir_from_env("BM_REPLAY_DIR"),
+    )
     app.state.sessions = sessions or SessionStore()
 
     @app.get("/api/health", response_model=HealthResponse)
@@ -121,7 +135,9 @@ def create_app(
         else:
             session = app.state.sessions.create()
 
-        record = app.state.registry.submit(request.task.strip(), session)
+        record = app.state.registry.submit(
+            request.task.strip(), session, language=request.language
+        )
         return TaskAccepted(
             task_id=record.task_id, session_id=session.session_id, state=record.state
         )
