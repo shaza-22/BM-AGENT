@@ -23,7 +23,7 @@ from agent.link_selector import (
     select_next_link,
 )
 from agent.llm import ClaudeLLMClient, FakeLLMClient, GeminiLLMClient, LLMError
-from conftest import StubAnthropic, StubGemini, text_response
+from conftest import StubAnthropic, StubGemini, bad_request, text_response
 from browsing.extract_links import canonical_key
 
 HOME = "https://www.banquemisr.com/"
@@ -493,7 +493,7 @@ class TestDefensiveParsingAcrossProviders:
         # precisely when defensive parsing carries the run.
         stub = StubGemini(
             text='{"choice": 0, "reasoning": "Alpha it is", "confidence": 0.6}',
-            error=ValueError("Invalid JSON schema supplied"),
+            error=bad_request("Invalid JSON schema supplied"),
             errors_until=1,
         )
         context = SelectionContext(hop=0, current_url=HOME)

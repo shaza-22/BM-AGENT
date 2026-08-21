@@ -188,6 +188,50 @@ def choose_by(*needles: str):
 # --------------------------------------------------------------------------
 # LLM provider stubs
 # --------------------------------------------------------------------------
+def api_error(message: str, *, code: int | None = None, details: object = None) -> Exception:
+    """An SDK-shaped error: a status code and a google.rpc details payload.
+
+    Real refusals carry a status; the message often says nothing useful. Tests
+    that fake a bare ValueError would let status-driven handling pass by
+    accident.
+    """
+    error = RuntimeError(message)
+    if code is not None:
+        error.code = code
+    if details is not None:
+        error.details = details
+    return error
+
+
+def quota_error(quota_id: str, *, retry_delay: str | None = None) -> Exception:
+    """A 429 shaped like Google's, with a QuotaFailure violation."""
+    details: list[dict] = [
+        {
+            "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+            "violations": [
+                {
+                    "quotaMetric": "generativelanguage.googleapis.com/generate_content_requests",
+                    "quotaId": quota_id,
+                }
+            ],
+        }
+    ]
+    if retry_delay:
+        details.append(
+            {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": retry_delay}
+        )
+    return api_error(
+        "429 RESOURCE_EXHAUSTED. You exceeded your current quota.",
+        code=429,
+        details={"error": {"code": 429, "status": "RESOURCE_EXHAUSTED", "details": details}},
+    )
+
+
+def bad_request(message: str = "Request contains an invalid argument.") -> Exception:
+    """Google's bare 400: no field named, so only the status is usable."""
+    return api_error(f"400 INVALID_ARGUMENT. {message}", code=400)
+
+
 def no_sleep(_seconds: float) -> None:
     """Substituted for time.sleep so retry tests never actually wait."""
 
