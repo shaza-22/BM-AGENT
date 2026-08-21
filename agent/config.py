@@ -52,7 +52,7 @@ GEMINI_API_KEY_ENV = "GEMINI_API_KEY"
 ANTHROPIC_API_KEY_ENV = "ANTHROPIC_API_KEY"
 
 # Gemini. The free tier's usual workhorse; override if your quota differs.
-GEMINI_MODEL = "gemini-3.6-flash"
+GEMINI_MODEL = "gemini-3.5-flash-lite"
 GEMINI_MAX_TOKENS = 4096
 
 # Gemini reasons before answering by default, and link selection does not need
@@ -65,8 +65,8 @@ GEMINI_MAX_TOKENS = 4096
 # reasoning off), newer ones take a level. Whichever is set is sent; if the API
 # rejects it, the client logs a warning, drops it and carries on, so a model
 # that supports neither still works.
-GEMINI_THINKING_BUDGET: int | None = 0
-GEMINI_THINKING_LEVEL: str | None = None  # e.g. "low"; try this if the budget is rejected
+GEMINI_THINKING_BUDGET = None
+GEMINI_THINKING_LEVEL = "low"
 
 # Claude. Link selection is a judgement call over a short list, not a research
 # task, so low effort keeps adaptive thinking brief. Note: do NOT disable
