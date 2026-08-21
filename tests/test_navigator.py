@@ -530,6 +530,42 @@ class TestTrailAndLogging:
         assert result.trail[0].links_found == 99
 
 
+class TestTimingBreakdown:
+    def test_the_result_reports_where_the_time_went(self):
+        pages = {HOME: page("/a|A"), "https://www.banquemisr.com/a": page()}
+        result = Navigator(
+            FakeLLMClient([reply(0), reply(-1)]), fetcher=fetcher_for(pages)
+        ).navigate("goal")
+
+        timing = result.stats["timing"]
+        assert set(timing) == {
+            "total_s", "page_request_s", "page_rate_limit_wait_s", "page_retry_wait_s",
+            "robots_s", "llm_s", "llm_retry_wait_s", "llm_retries",
+        }
+        assert timing["total_s"] >= 0.0
+        assert timing["page_rate_limit_wait_s"] == 0.0   # delay disabled in tests
+
+    def test_selection_records_carry_their_own_duration(self):
+        navigator = Navigator(
+            FakeLLMClient([reply(0), reply(-1)]),
+            fetcher=fetcher_for({HOME: page("/a|A"), "https://www.banquemisr.com/a": page()}),
+            step_logger=StepLogger(run_id="r"),
+        )
+        navigator.navigate("goal")
+        selections = [r for r in navigator.step_logger.records if r["event"] == "selection"]
+        assert all("elapsed_ms" in record for record in selections)
+
+    def test_timing_is_reported_even_when_the_run_fails(self):
+        def explode(prompt):
+            raise LLMError("no key")
+
+        result = Navigator(
+            FakeLLMClient(explode), fetcher=fetcher_for({HOME: page("/a|A")})
+        ).navigate("goal")
+        assert result.status == "error"
+        assert "timing" in result.stats
+
+
 class TestRunIsolation:
     def test_one_fetcher_serves_the_whole_run(self):
         pages = {HOME: page("/a|A"), "https://www.banquemisr.com/a": page("/b|B", "/a|A"),

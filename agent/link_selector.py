@@ -37,6 +37,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Sequence
 
@@ -160,6 +161,7 @@ class Selection:
     offered: int = 0
     available: int = 0
     parse_error: str | None = None
+    elapsed_ms: int = 0
     raw_response: str | None = None
     ranked: list[Candidate] = field(default_factory=list, repr=False)
 
@@ -463,8 +465,15 @@ def select_next_link(
         )
 
     prompt = build_prompt(sub_goal, ranked, context)
+    started = time.perf_counter()
     raw = llm.complete(prompt, system=SYSTEM_PROMPT, schema=SELECTION_SCHEMA)
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
     selection = parse_selection(raw, ranked, available)
+    selection.elapsed_ms = elapsed_ms
+    logger.info(
+        "selection hop=%d outcome=%s offered=%d/%d ms=%d",
+        context.hop + 1, selection.outcome, selection.offered, selection.available, elapsed_ms,
+    )
 
     if selection.url and selection.confidence < config.MIN_CONFIDENCE:
         logger.info(
@@ -483,6 +492,7 @@ def select_next_link(
             outcome="none",
             offered=selection.offered,
             available=selection.available,
+            elapsed_ms=elapsed_ms,
             raw_response=raw,
             ranked=selection.ranked,
         )

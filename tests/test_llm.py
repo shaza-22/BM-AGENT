@@ -475,3 +475,29 @@ class TestClientsRetry:
         client = GeminiLLMClient(client=stub, sleep=no_sleep)
         client.complete("hi", schema={"type": "object"})
         assert len(stub.configs) == 2    # one rejected, one without the schema
+
+
+class TestTimingVisibility:
+    def test_time_spent_in_the_api_is_recorded(self):
+        client = GeminiLLMClient(client=StubGemini("ok"))
+        client.complete("hi")
+        assert client.api_seconds > 0.0
+        assert client.calls == 1
+
+    def test_retry_waits_are_recorded_separately(self):
+        error = RuntimeError("503 UNAVAILABLE")
+        error.code = 503
+        stub = StubGemini(text="ok", error=error, errors_until=2)
+        client = GeminiLLMClient(client=stub, sleep=no_sleep)
+        client.complete("hi")
+        # Two backoffs at 2s and 4s: reported, not silently absorbed into the
+        # call time, so a slow hop can be blamed on the right thing.
+        assert client.retries == 2
+        assert client.retry_wait_s == 6.0
+
+    def test_claude_records_the_same_figures(self):
+        client = ClaudeLLMClient(client=StubAnthropic(text_response("ok")))
+        client.complete("hi")
+        assert client.api_seconds > 0.0
+        assert client.retries == 0
+        assert client.retry_wait_s == 0.0

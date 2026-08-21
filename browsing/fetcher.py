@@ -53,8 +53,9 @@ import random
 import re
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Literal, TypedDict
+from typing import Any, Literal, TypedDict
 from urllib.parse import urlsplit
 from urllib.robotparser import RobotFileParser
 
@@ -68,6 +69,24 @@ logger = logging.getLogger(__name__)
 
 ContentKind = Literal["html", "pdf", "other"]
 RenderMode = Literal["requests", "playwright"]
+
+
+@dataclass
+class FetchTiming:
+    """Where the wall-clock of one fetch went.
+
+    Kept apart because they have different causes and different fixes: a
+    politeness wait is our own pacing, a retry wait is the site failing, and
+    request time is the site being slow.
+    """
+
+    wait_s: float = 0.0
+    retry_wait_s: float = 0.0
+    request_s: float = 0.0
+
+    @property
+    def total_s(self) -> float:
+        return self.wait_s + self.retry_wait_s + self.request_s
 
 
 class PageDict(TypedDict):
@@ -269,6 +288,14 @@ class RateLimiter:
             # queues behind this request instead of racing it.
             self._last[host] = now + sleep_for
         if sleep_for > 0:
+            # Logged before sleeping so a live run shows the pause as it
+            # happens, and so a politeness wait is never mistaken for a retry
+            # backoff or a slow server.
+            logger.info(
+                "rate-limit wait host=%s slept=%.2fs (politeness delay between "
+                "requests to the same host; not a retry)",
+                host, sleep_for,
+            )
             time.sleep(sleep_for)
         return sleep_for
 
@@ -314,12 +341,24 @@ class Fetcher:
             "errors": 0,
             "robots_blocked": 0,
         }
+        # Seconds, so a slow run can be attributed without a stopwatch.
+        self._timing = {
+            "rate_limit_wait_s": 0.0,
+            "retry_wait_s": 0.0,
+            "request_s": 0.0,
+            "robots_s": 0.0,
+        }
 
     # -- public ------------------------------------------------------------
     @property
-    def stats(self) -> dict[str, int]:
-        """Counters for the run report (how often the browser was needed)."""
-        return dict(self._stats)
+    def stats(self) -> dict[str, Any]:
+        """Counters for the run report (how often the browser was needed).
+
+        ``rate_limit_wait_s`` is our own politeness pacing, ``retry_wait_s`` is
+        time spent backing off after a failure, and ``request_s`` is the site
+        being slow. Keeping them apart is what makes a long run explainable.
+        """
+        return {**self._stats, **{k: round(v, 2) for k, v in self._timing.items()}}
 
     def clear_cache(self) -> None:
         self._cache.clear()
@@ -336,7 +375,7 @@ class Fetcher:
             result = self._failure(
                 url, url, 0, "url rejected by normalize_url (off-domain, asset, or wrong language)"
             )
-            self._log(result, canonical_key(url) if url else "", 0, started, cache="miss")
+            self._log(result, canonical_key(url) if url else "", 0, started, FetchTiming(), cache="miss")
             return result
 
         key = canonical_key(normalized)
@@ -344,22 +383,26 @@ class Fetcher:
         cached = self._cache.get(key)
         if cached is not None:
             self._stats["cache_hits"] += 1
-            self._log(cached, key, 0, started, cache="hit")
+            self._log(cached, key, 0, started, FetchTiming(), cache="hit")
             return dict(cached)  # copy: callers must not mutate the cache
 
         if self._respect_robots and not self.robots_allowed(normalized):
             self._stats["robots_blocked"] += 1
             result = self._failure(url, normalized, 0, "blocked by robots.txt")
             self._cache[key] = result
-            self._log(result, key, 0, started, cache="miss")
+            self._log(result, key, 0, started, FetchTiming(), cache="miss")
             return dict(result)
 
-        result, link_count = self._fetch_live(url, normalized)
+        timing = FetchTiming()
+        result, link_count = self._fetch_live(url, normalized, timing)
         self._cache[key] = result
         self._stats["fetches"] += 1
+        self._timing["rate_limit_wait_s"] += timing.wait_s
+        self._timing["retry_wait_s"] += timing.retry_wait_s
+        self._timing["request_s"] += timing.request_s
         if not result["ok"]:
             self._stats["errors"] += 1
-        self._log(result, key, link_count, started, cache="miss")
+        self._log(result, key, link_count, started, timing, cache="miss")
         return dict(result)
 
     def robots_allowed(self, url: str) -> bool:
@@ -386,6 +429,7 @@ class Fetcher:
         parser = RobotFileParser()
         parser.set_url(f"{origin}/robots.txt")
         crawl_delay = 0.0
+        robots_started = time.perf_counter()
         try:
             response = self._session.get(
                 f"{origin}/robots.txt", timeout=min(self._timeout, 10.0), allow_redirects=True
@@ -405,6 +449,7 @@ class Fetcher:
             logger.warning("robots.txt fetch failed for %s (%s) -- treating as allow-all", origin, exc)
             parser.parse([])
 
+        self._timing["robots_s"] += time.perf_counter() - robots_started
         try:
             declared = parser.crawl_delay(config.USER_AGENT)
             crawl_delay = float(declared) if declared else 0.0
@@ -419,23 +464,28 @@ class Fetcher:
         entry = self._robots.get(f"{parts.scheme}://{parts.netloc}")
         return entry[1] if entry else 0.0
 
-    def _get_with_retry(self, url: str) -> tuple[requests.Response | None, str | None]:
+    def _get_with_retry(
+        self, url: str, timing: FetchTiming
+    ) -> tuple[requests.Response | None, str | None]:
         host = urlsplit(url).hostname or ""
         attempts = max(1, self._max_retries + 1)
         last_error: str | None = None
 
         for attempt in range(attempts):
-            self._rate_limiter.wait(host, self._crawl_delay(url))
+            timing.wait_s += self._rate_limiter.wait(host, self._crawl_delay(url))
             retryable = False
+            started = time.perf_counter()
             try:
                 response = self._session.get(
                     url, timeout=self._timeout, allow_redirects=True, stream=True
                 )
             except requests.Timeout as exc:
+                timing.request_s += time.perf_counter() - started
                 last_error, retryable = f"timeout after {self._timeout}s: {exc}", True
             except requests.RequestException as exc:
                 last_error, retryable = f"request failed: {exc}", True
             else:
+                timing.request_s += time.perf_counter() - started
                 status = getattr(response, "status_code", 0)
                 # 403/404 are settled answers; retrying only spends page budget.
                 if status in config.RETRY_STATUS and attempt < attempts - 1:
@@ -447,6 +497,7 @@ class Fetcher:
             if retryable and attempt < attempts - 1:
                 backoff = config.RETRY_BACKOFF_S * (2**attempt)
                 logger.warning("retrying %s in %.1fs after %s", url, backoff, last_error)
+                timing.retry_wait_s += backoff
                 time.sleep(backoff)
 
         return None, last_error
@@ -484,11 +535,14 @@ class Fetcher:
             return "html"
         return "other"
 
-    def _fetch_live(self, requested: str, url: str) -> tuple[PageDict, int]:
-        response, error = self._get_with_retry(url)
+    def _fetch_live(
+        self, requested: str, url: str, timing: FetchTiming
+    ) -> tuple[PageDict, int]:
+        response, error = self._get_with_retry(url, timing)
         if response is None:
             return self._failure(requested, url, 0, error or "unknown fetch error"), 0
 
+        read_started = time.perf_counter()
         try:
             content = self._read_capped(response)
         except ValueError as exc:
@@ -496,6 +550,7 @@ class Fetcher:
         except requests.RequestException as exc:
             return self._failure(requested, url, response.status_code, f"read failed: {exc}"), 0
         finally:
+            timing.request_s += time.perf_counter() - read_started
             response.close()
 
         status = response.status_code
@@ -665,16 +720,24 @@ class Fetcher:
         )
 
     @staticmethod
-    def _log(result: PageDict, key: str, link_count: int, started: float, *, cache: str) -> None:
+    def _log(
+        result: PageDict, key: str, link_count: int, started: float,
+        timing: FetchTiming, *, cache: str,
+    ) -> None:
         """One structured line per fetch -- part of the deliverable audit trail.
 
         The canonical key is logged next to the URL so that a dedupe bug (two
         spellings of one page, or a token that survived stripping) is visible
         directly in the step log instead of needing a reproduction.
+
+        ``wait_ms``/``retry_ms``/``req_ms`` break the total down, so a slow hop
+        can be attributed to our own pacing, to backing off after a failure, or
+        to the site itself, without guessing.
         """
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         logger.info(
-            "fetch url=%s key=%s status=%s ok=%s type=%s render=%s cache=%s links=%d text=%d ms=%d%s",
+            "fetch url=%s key=%s status=%s ok=%s type=%s render=%s cache=%s links=%d text=%d "
+            "wait_ms=%d retry_ms=%d req_ms=%d ms=%d%s",
             result["url"],
             key,
             result["status"],
@@ -684,6 +747,9 @@ class Fetcher:
             cache,
             link_count,
             len(result["text"] or ""),
+            int(timing.wait_s * 1000),
+            int(timing.retry_wait_s * 1000),
+            int(timing.request_s * 1000),
             elapsed_ms,
             f" error={result['error']!r}" if result["error"] else "",
         )

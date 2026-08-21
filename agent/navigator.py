@@ -211,6 +211,7 @@ class Navigator:
             max_pages=self._max_pages,
         )
 
+        run_started = time.perf_counter()
         pages_fetched = 0
         hops_used = 0
         current_page: PageDict | None = None
@@ -241,7 +242,7 @@ class Navigator:
                 self._log.emit("step", **step.to_dict())
                 logger.warning("WAF block page detected at %s -- aborting run", page["url"])
                 return self._finish(
-                    "blocked", None, trail, pages_fetched, hops_used, None, sub_goal,
+                    "blocked", None, trail, pages_fetched, hops_used, None, sub_goal, run_started=run_started,
                     final_reasoning="The site returned an access-denied page; stopping to avoid a ban.",
                 )
 
@@ -258,7 +259,7 @@ class Navigator:
             if resolved:
                 return self._finish(
                     "resolved", page, trail, pages_fetched, hops_used,
-                    verdict.get("extracted") or {}, sub_goal,
+                    verdict.get("extracted") or {}, sub_goal, run_started=run_started,
                     final_reasoning=str(verdict.get("reason") or "sub-goal resolved"),
                 )
 
@@ -272,13 +273,13 @@ class Navigator:
 
             if hops_used >= self._max_hops:
                 return self._finish(
-                    "exhausted", None, trail, pages_fetched, hops_used, None, sub_goal,
+                    "exhausted", None, trail, pages_fetched, hops_used, None, sub_goal, run_started=run_started,
                     cap_hit="hops",
                     final_reasoning=f"Reached the maximum of {self._max_hops} hops without resolving the sub-goal.",
                 )
             if pages_fetched >= self._max_pages:
                 return self._finish(
-                    "exhausted", None, trail, pages_fetched, hops_used, None, sub_goal,
+                    "exhausted", None, trail, pages_fetched, hops_used, None, sub_goal, run_started=run_started,
                     cap_hit="pages",
                     final_reasoning=f"Reached the maximum of {self._max_pages} pages without resolving the sub-goal.",
                 )
@@ -301,7 +302,7 @@ class Navigator:
             except LLMError as exc:
                 logger.error("link selection failed: %s", exc)
                 return self._finish(
-                    "error", None, trail, pages_fetched, hops_used, None, sub_goal,
+                    "error", None, trail, pages_fetched, hops_used, None, sub_goal, run_started=run_started,
                     final_reasoning=f"The language model could not be reached: {exc}",
                 )
 
@@ -313,6 +314,7 @@ class Navigator:
                 chosen_label=selection.label,
                 candidate_index=selection.candidate_index,
                 outcome=selection.outcome,
+                elapsed_ms=selection.elapsed_ms,
                 reasoning=selection.reasoning,
                 confidence=selection.confidence,
                 candidates_offered=selection.offered,
@@ -334,11 +336,11 @@ class Navigator:
                 # last fetch failed there is nothing to have arrived at.
                 if selection.outcome == "arrived" and current_page is not None:
                     return self._finish(
-                        "arrived", current_page, trail, pages_fetched, hops_used, None, sub_goal,
+                        "arrived", current_page, trail, pages_fetched, hops_used, None, sub_goal, run_started=run_started,
                         final_reasoning=selection.reasoning,
                     )
                 return self._finish(
-                    "no_candidates", None, trail, pages_fetched, hops_used, None, sub_goal,
+                    "no_candidates", None, trail, pages_fetched, hops_used, None, sub_goal, run_started=run_started,
                     final_reasoning=selection.reasoning,
                 )
 
@@ -355,6 +357,7 @@ class Navigator:
         # Unreachable: the loop only exits through a return above.
         return self._finish(
             "error", None, trail, pages_fetched, hops_used, None, sub_goal,
+            run_started=run_started,
             final_reasoning="Navigation ended without a decision.",
         )
 
@@ -459,6 +462,25 @@ class Navigator:
             elapsed_ms=int((time.perf_counter() - started) * 1000),
         )
 
+    def _run_timing(self, run_started: float) -> dict[str, float]:
+        """Where the run's wall-clock went.
+
+        Reported because "the run took three minutes" is not actionable on its
+        own: politeness pacing, retry backoff, a slow site and a slow model all
+        look identical from outside, and only one of them is ours to change.
+        """
+        fetcher = self._fetcher.stats
+        return {
+            "total_s": round(time.perf_counter() - run_started, 2),
+            "page_request_s": fetcher.get("request_s", 0.0),
+            "page_rate_limit_wait_s": fetcher.get("rate_limit_wait_s", 0.0),
+            "page_retry_wait_s": fetcher.get("retry_wait_s", 0.0),
+            "robots_s": fetcher.get("robots_s", 0.0),
+            "llm_s": round(getattr(self._llm, "api_seconds", 0.0) or 0.0, 2),
+            "llm_retry_wait_s": round(getattr(self._llm, "retry_wait_s", 0.0) or 0.0, 2),
+            "llm_retries": getattr(self._llm, "retries", 0) or 0,
+        }
+
     def _finish(
         self,
         status: NavigationStatus,
@@ -471,8 +493,13 @@ class Navigator:
         *,
         cap_hit: Literal["hops", "pages"] | None = None,
         final_reasoning: str = "",
+        run_started: float | None = None,
     ) -> NavigationResult:
-        stats = {"fetcher": self._fetcher.stats, "llm_calls": getattr(self._llm, "calls", None)}
+        stats = {
+            "fetcher": self._fetcher.stats,
+            "llm_calls": getattr(self._llm, "calls", None),
+            "timing": self._run_timing(run_started if run_started is not None else time.perf_counter()),
+        }
         self._log.emit(
             "navigation_finished",
             sub_goal=sub_goal,

@@ -198,6 +198,29 @@ def main() -> int:
     print(f"hops     : {result.hops_used} | pages: {result.pages_fetched} | "
           f"{time.perf_counter() - started:.1f}s")
     print(f"llm calls: {result.stats.get('llm_calls')}")
+
+    timing = result.stats.get("timing") or {}
+    if timing:
+        # Split so a slow run is attributable: our own pacing, backing off
+        # after a failure, a slow site, or a slow model.
+        accounted = sum(
+            float(timing.get(key, 0.0))
+            for key in ("page_request_s", "page_rate_limit_wait_s", "page_retry_wait_s",
+                        "robots_s", "llm_s", "llm_retry_wait_s")
+        )
+        print("time     :")
+        print(f"  model calls           {timing.get('llm_s', 0):>7.1f}s"
+              f"  ({result.stats.get('llm_calls')} calls)")
+        print(f"  model retry backoff   {timing.get('llm_retry_wait_s', 0):>7.1f}s"
+              f"  ({timing.get('llm_retries', 0)} retries)")
+        print(f"  page requests         {timing.get('page_request_s', 0):>7.1f}s"
+              f"  ({result.pages_fetched} pages)")
+        print(f"  politeness pacing     {timing.get('page_rate_limit_wait_s', 0):>7.1f}s"
+              f"  (1-2s between requests to the same host)")
+        print(f"  page retry backoff    {timing.get('page_retry_wait_s', 0):>7.1f}s")
+        print(f"  robots.txt            {timing.get('robots_s', 0):>7.1f}s")
+        print(f"  unaccounted           {max(0.0, timing.get('total_s', 0) - accounted):>7.1f}s"
+              f"  (parsing, extraction, validation)")
     if result.extracted:
         print(f"extracted: {result.extracted}")
     print("sources  :")

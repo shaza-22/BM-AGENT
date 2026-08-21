@@ -43,7 +43,7 @@ tests/               pytest suite, fully offline
 ```bash
 pip install -r requirements.txt
 cp .env.example .env                    # then paste your key into it
-pytest                                  # 312 tests, no network, no API key
+pytest                                  # 324 tests, no network, no API key
 python scripts/save_fixtures.py         # ONE-OFF, hits the live site
 ```
 
@@ -118,6 +118,47 @@ WARNING agent.llm: Gemini call failed (status=503, attempt 1/4): … -- retrying
 
 Worst case a hop now takes ~14s longer before giving up rather than failing
 instantly — the right trade for a live demo.
+
+### Where a run's time goes
+
+There is **no client-side rate limiter for the model** — nothing self-paces
+against a requests-per-minute quota. Only three things ever sleep:
+
+| | Where | Cost |
+|---|---|---|
+| politeness pacing | `browsing/fetcher.py` `RateLimiter` | 1–2s before each request to a host, first one free |
+| HTTP retry backoff | `browsing/fetcher.py` | 2s, one retry per page |
+| model retry backoff | `agent/llm.py` | 2s + 4s + 8s = 14s worst case per call |
+
+So a 3-page, 3-call run spends 2–4s on pacing. If it takes minutes, the time is
+in the model, the site, or retries — and each is now reported separately.
+
+Every fetch line splits the total:
+
+```
+fetch url=… wait_ms=1400 retry_ms=0 req_ms=6100 ms=7600
+rate-limit wait host=www.banquemisr.com slept=1.42s (politeness delay …; not a retry)
+```
+
+and `NavigationResult.stats["timing"]` breaks down the whole run, which
+`live_navigate.py` prints:
+
+```
+time     :
+  model calls               0.8s  (2 calls)
+  model retry backoff       2.0s  (1 retries)
+  page requests             0.0s  (2 pages)
+  politeness pacing         0.0s  (1-2s between requests to the same host)
+  page retry backoff        0.0s
+  robots.txt                0.0s
+  unaccounted               0.0s  (parsing, extraction, validation)
+```
+
+If `model calls` dominates, the lever is the model — a smaller model, or
+Gemini 2.5's thinking budget. If `model retry backoff` dominates, the endpoint
+is failing and `LLM_MAX_ATTEMPTS` is the knob. Only if `politeness pacing`
+dominates is `DELAY_RANGE_S` worth touching, and on a WAF-protected site it is
+the last thing to cut.
 
 ### Provider differences worth knowing
 

@@ -431,6 +431,70 @@ class TestRateLimiter:
         assert time.monotonic() - started >= 0.04
 
 
+class TestTimingVisibility:
+    """A slow run must be attributable without a stopwatch.
+
+    Politeness pacing, retry backoff and a slow server look identical from
+    outside, and only one of them is ours to change.
+    """
+
+    def test_rate_limit_waits_are_logged(self, caplog):
+        limiter = RateLimiter((0.05, 0.05))
+        limiter.wait("www.banquemisr.com")
+        with caplog.at_level(logging.INFO, logger="browsing.fetcher"):
+            limiter.wait("www.banquemisr.com")
+        assert "rate-limit wait" in caplog.text
+        assert "not a retry" in caplog.text
+        assert "host=www.banquemisr.com" in caplog.text
+
+    def test_no_log_when_no_wait_was_needed(self, caplog):
+        with caplog.at_level(logging.INFO, logger="browsing.fetcher"):
+            RateLimiter((0.0, 0.0)).wait("host")
+        assert "rate-limit wait" not in caplog.text
+
+    def test_the_fetch_line_separates_waiting_from_the_request(self, caplog):
+        # The old line reported one total, so a 7s hop could have been 6s of
+        # server time or 6s of our own pacing and there was no way to tell.
+        fetcher, _ = make_fetcher({PAGE: html_response(PAGE, padded("<h1>Fees</h1>"))},
+                                  delay_range=(0.05, 0.05))
+        fetcher.fetch(PAGE)
+        with caplog.at_level(logging.INFO, logger="browsing.fetcher"):
+            fetcher.fetch("https://www.banquemisr.com/Home/Pages/Other")
+        assert "wait_ms=" in caplog.text
+        assert "req_ms=" in caplog.text
+        assert "retry_ms=" in caplog.text
+
+    def test_stats_report_where_the_time_went(self):
+        fetcher, _ = make_fetcher({PAGE: html_response(PAGE, padded("<h1>Fees</h1>"))},
+                                  delay_range=(0.05, 0.05))
+        fetcher.fetch(PAGE)
+        fetcher.fetch("https://www.banquemisr.com/Home/Pages/Other")
+        stats = fetcher.stats
+        assert stats["rate_limit_wait_s"] >= 0.04     # the second fetch waited
+        assert stats["retry_wait_s"] == 0.0
+        assert "request_s" in stats and "robots_s" in stats
+
+    def test_retry_backoff_is_counted_separately_from_pacing(self, monkeypatch):
+        monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+        routes = {PAGE: [FakeResponse(PAGE, status_code=503),
+                         html_response(PAGE, padded("<h1>Fees</h1>"))]}
+        fetcher, _ = make_fetcher(routes)
+        fetcher.fetch(PAGE)
+        assert fetcher.stats["retry_wait_s"] == config.RETRY_BACKOFF_S
+        assert fetcher.stats["rate_limit_wait_s"] == 0.0
+
+    def test_robots_time_is_attributed(self):
+        # A WAF that stalls robots.txt would otherwise be invisible.
+        robots = "https://www.banquemisr.com/robots.txt"
+        session = FakeSession({robots: html_response(robots, "User-agent: *\nAllow: /",
+                                                     content_type="text/plain"),
+                               PAGE: html_response(PAGE, padded("<h1>F</h1>"))})
+        fetcher = Fetcher(session=session, respect_robots=True, delay_range=(0.0, 0.0),
+                          allow_playwright=False)
+        fetcher.fetch(PAGE)
+        assert fetcher.stats["robots_s"] >= 0.0
+
+
 class TestModuleApi:
     def test_fetch_page_shares_a_fetchers_cache(self):
         fetcher, session = make_fetcher({PAGE: html_response(PAGE, padded("<h1>Fees</h1>"))})

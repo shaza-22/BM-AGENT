@@ -116,6 +116,7 @@ def retry_api_call(
     provider: str,
     attempts: int | None = None,
     sleep: Callable[[float], None] | None = None,
+    on_retry: Callable[[float], None] | None = None,
 ) -> Any:
     """Run one API call, retrying transient failures with exponential backoff.
 
@@ -145,6 +146,8 @@ def retry_api_call(
                 "%s call failed (status=%s, attempt %d/%d): %s -- retrying in %.1fs",
                 provider, error.status, attempt, total, error, delay,
             )
+            if on_retry is not None:
+                on_retry(delay)
             pause(delay)
 
     raise LLMError(f"{provider} call exhausted its attempts")  # pragma: no cover
@@ -208,7 +211,31 @@ class LLMClient(Protocol):
         """Return the model's reply as text."""
 
 
-class ClaudeLLMClient:
+class _TimedClient:
+    """Mixin: records retry waits and total time spent inside the API.
+
+    The navigator reports these so a slow run can be attributed to the model,
+    to backing off after a failure, or to page fetching -- rather than guessed
+    at, or blamed on a rate limiter that does not exist at this layer.
+    """
+
+    retries: int
+    retry_wait_s: float
+    api_seconds: float
+
+    def _record_retry(self, delay: float) -> None:
+        self.retries += 1
+        self.retry_wait_s += delay
+
+    def _timed(self, operation: Callable[[], Any]) -> Any:
+        started = time.perf_counter()
+        try:
+            return operation()
+        finally:
+            self.api_seconds += time.perf_counter() - started
+
+
+class ClaudeLLMClient(_TimedClient):
     """Claude-backed :class:`LLMClient`.
 
     ``schema`` is passed through as a structured-output constraint, so the
@@ -233,6 +260,9 @@ class ClaudeLLMClient:
         self.max_attempts = max_attempts if max_attempts is not None else config.LLM_MAX_ATTEMPTS
         self._sleep = sleep
         self._client = client
+        self.retries = 0
+        self.retry_wait_s = 0.0
+        self.api_seconds = 0.0
         # Server-side refusal fallback: if a safety classifier declines, the
         # same request is re-run on another model inside the same call instead
         # of the navigation step simply failing.
@@ -272,7 +302,7 @@ class ClaudeLLMClient:
             request["system"] = system
 
         self.calls += 1
-        response = self._send(client, request)
+        response = self._timed(lambda: self._send(client, request))
 
         if getattr(response, "stop_reason", None) == "refusal":
             details = getattr(response, "stop_details", None)
@@ -308,6 +338,7 @@ class ClaudeLLMClient:
                     provider="Claude",
                     attempts=self.max_attempts,
                     sleep=self._sleep,
+                    on_retry=self._record_retry,
                 )
             except LLMError as exc:
                 if not _looks_like_unsupported_parameter(exc):
@@ -322,6 +353,7 @@ class ClaudeLLMClient:
             provider="Claude",
             attempts=self.max_attempts,
             sleep=self._sleep,
+            on_retry=self._record_retry,
         )
 
 
@@ -338,7 +370,7 @@ class _SchemaRejected(Exception):
     """Internal: the API would not accept the structured-output schema."""
 
 
-class GeminiLLMClient:
+class GeminiLLMClient(_TimedClient):
     """Gemini-backed :class:`LLMClient`.
 
     Structured output goes through ``response_json_schema``, which takes the
@@ -368,6 +400,9 @@ class GeminiLLMClient:
         self._sleep = sleep
         self._client = client
         self._api_key_env = api_key_env
+        self.retries = 0
+        self.retry_wait_s = 0.0
+        self.api_seconds = 0.0
         # Cleared if the API turns out not to accept the schema, so the run
         # continues on the defensive parser instead of failing every hop.
         self._structured_output = True
@@ -399,7 +434,7 @@ class GeminiLLMClient:
 
         if schema is not None and self._structured_output:
             try:
-                return self._generate(client, prompt, system, schema)
+                return self._timed(lambda: self._generate(client, prompt, system, schema))
             except _SchemaRejected as exc:
                 logger.warning(
                     "Gemini did not accept the response schema (%s); "
@@ -408,7 +443,7 @@ class GeminiLLMClient:
                 )
                 self._structured_output = False
 
-        return self._generate(client, prompt, system, None)
+        return self._timed(lambda: self._generate(client, prompt, system, None))
 
     def _generate(
         self, client: Any, prompt: str, system: str | None, schema: dict | None
@@ -432,6 +467,7 @@ class GeminiLLMClient:
                 provider="Gemini",
                 attempts=self.max_attempts,
                 sleep=self._sleep,
+                on_retry=self._record_retry,
             )
         except LLMError as exc:
             # A rejected schema is a 400, so it is never retried; it degrades to
