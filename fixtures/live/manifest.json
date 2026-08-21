@@ -1,16 +1,23 @@
 {
-  "generated_at": "2026-08-20T14:35:22.151232+00:00",
+  "generated_at": "2026-08-21T18:43:21.818362+00:00",
   "seed": "https://www.banquemisr.com/",
   "language": "en",
-  "elapsed_s": 20.1,
+  "elapsed_s": 29.4,
   "stats": {
-    "fetches": 7,
+    "fetches": 14,
     "cache_hits": 0,
     "escalations": 0,
     "escalations_helped": 0,
     "pdfs": 0,
     "errors": 0,
-    "robots_blocked": 0
+    "robots_blocked": 0,
+    "rate_limit_wait_s": 11.088,
+    "retry_wait_s": 0.0,
+    "request_s": 6.941,
+    "robots_s": 0.237,
+    "pdf_text_s": 0.0,
+    "html_parse_s": 0.653,
+    "link_extract_s": 0.761
   },
   "pages": [
     {
@@ -22,14 +29,14 @@
       "content_type": "html",
       "render_mode": "requests",
       "error": null,
-      "fetched_at": "2026-08-20T14:35:22.151232+00:00",
+      "fetched_at": "2026-08-21T18:43:21.818362+00:00",
       "files": [
         "index.html",
         "index.txt"
       ],
-      "html_bytes": 303165,
+      "html_bytes": 303425,
       "text_chars": 5118,
-      "link_count": 99
+      "link_count": 100
     },
     {
       "requested_url": "https://www.banquemisr.com/Home/SMEs/Retail%20Banking/Pages/Cards",
@@ -40,14 +47,14 @@
       "content_type": "html",
       "render_mode": "requests",
       "error": null,
-      "fetched_at": "2026-08-20T14:35:23.403799+00:00",
+      "fetched_at": "2026-08-21T18:43:23.376435+00:00",
       "files": [
         "home-smes-retail-banking-pages-cards.html",
         "home-smes-retail-banking-pages-cards.txt"
       ],
       "html_bytes": 232391,
       "text_chars": 3208,
-      "link_count": 90
+      "link_count": 91
     },
     {
       "requested_url": "https://www.banquemisr.com/Home/SMEs/Retail%20Banking/Pages/Cards/Credit%20Cards%20List",
@@ -58,14 +65,14 @@
       "content_type": "html",
       "render_mode": "requests",
       "error": null,
-      "fetched_at": "2026-08-20T14:35:25.076171+00:00",
+      "fetched_at": "2026-08-21T18:43:24.445497+00:00",
       "files": [
         "home-smes-retail-banking-pages-cards-credit-cards-list.html",
         "home-smes-retail-banking-pages-cards-credit-cards-list.txt"
       ],
       "html_bytes": 216074,
       "text_chars": 1957,
-      "link_count": 77
+      "link_count": 78
     },
     {
       "requested_url": "https://www.banquemisr.com/Home/SMEs/Retail%20Banking/Pages/Cards/Credit%20Cards%20Pages/Classic%20Credit%20Cards",
@@ -76,14 +83,14 @@
       "content_type": "html",
       "render_mode": "requests",
       "error": null,
-      "fetched_at": "2026-08-20T14:35:26.365918+00:00",
+      "fetched_at": "2026-08-21T18:43:26.559754+00:00",
       "files": [
         "home-smes-retail-banking-pages-cards-credit-cards-pages-classic-credit-cards.html",
         "home-smes-retail-banking-pages-cards-credit-cards-pages-classic-credit-cards.txt"
       ],
       "html_bytes": 78620,
       "text_chars": 6872,
-      "link_count": 78
+      "link_count": 79
     },
     {
       "requested_url": "https://www.banquemisr.com/Home/SMEs/Retail%20Banking/Accounts%20And%20Deposits",
@@ -94,14 +101,14 @@
       "content_type": "html",
       "render_mode": "requests",
       "error": null,
-      "fetched_at": "2026-08-20T14:35:28.352751+00:00",
+      "fetched_at": "2026-08-21T18:43:28.579658+00:00",
       "files": [
         "home-smes-retail-banking-accounts-and-deposits.html",
         "home-smes-retail-banking-accounts-and-deposits.txt"
       ],
       "html_bytes": 208375,
       "text_chars": 2093,
-      "link_count": 72
+      "link_count": 73
     },
     {
       "requested_url": "https://www.banquemisr.com/Home/SMEs/Retail%20Banking/Consumer%20Loans",
@@ -112,14 +119,14 @@
       "content_type": "html",
       "render_mode": "requests",
       "error": null,
-      "fetched_at": "2026-08-20T14:35:29.839787+00:00",
+      "fetched_at": "2026-08-21T18:43:29.811403+00:00",
       "files": [
         "home-smes-retail-banking-consumer-loans.html",
         "home-smes-retail-banking-consumer-loans.txt"
       ],
       "html_bytes": 201559,
       "text_chars": 3193,
-      "link_count": 71
+      "link_count": 72
     },
     {
       "requested_url": "https://www.banquemisr.com/Home/Pages/Fees",
@@ -130,14 +137,140 @@
       "content_type": "html",
       "render_mode": "requests",
       "error": null,
-      "fetched_at": "2026-08-20T14:35:31.366353+00:00",
+      "fetched_at": "2026-08-21T18:43:31.485159+00:00",
       "files": [
         "home-pages-fees.html",
         "home-pages-fees.txt"
       ],
       "html_bytes": 215708,
       "text_chars": 2380,
+      "link_count": 74
+    },
+    {
+      "requested_url": "https://www.banquemisr.com/?sc_lang=ar-EG",
+      "url": "https://www.banquemisr.com/?sc_lang=ar-EG",
+      "key": "banquemisr.com?sc_lang=ar-eg",
+      "status": 200,
+      "ok": true,
+      "content_type": "html",
+      "render_mode": "requests",
+      "error": null,
+      "fetched_at": "2026-08-21T18:43:32.874227+00:00",
+      "files": [
+        "sc-lang-ar-eg.html",
+        "sc-lang-ar-eg.txt"
+      ],
+      "html_bytes": 303178,
+      "text_chars": 5096,
+      "link_count": 100
+    },
+    {
+      "requested_url": "https://www.banquemisr.com/Home/Pages/Fees?sc_lang=ar-EG",
+      "url": "https://www.banquemisr.com/Home/Pages/Fees?sc_lang=ar-EG",
+      "key": "banquemisr.com/home/pages/fees?sc_lang=ar-eg",
+      "status": 200,
+      "ok": true,
+      "content_type": "html",
+      "render_mode": "requests",
+      "error": null,
+      "fetched_at": "2026-08-21T18:43:34.574362+00:00",
+      "files": [
+        "home-pages-fees-sc-lang-ar-eg.html",
+        "home-pages-fees-sc-lang-ar-eg.txt"
+      ],
+      "html_bytes": 215508,
+      "text_chars": 2412,
+      "link_count": 74
+    },
+    {
+      "requested_url": "https://www.banquemisr.com/Home/SMEs/Retail%20Banking/Accounts%20And%20Deposits?sc_lang=ar-EG",
+      "url": "https://www.banquemisr.com/Home/SMEs/Retail%20Banking/Accounts%20And%20Deposits?sc_lang=ar-EG",
+      "key": "banquemisr.com/home/smes/retail banking/accounts and deposits?sc_lang=ar-eg",
+      "status": 200,
+      "ok": true,
+      "content_type": "html",
+      "render_mode": "requests",
+      "error": null,
+      "fetched_at": "2026-08-21T18:43:35.823235+00:00",
+      "files": [
+        "home-smes-retail-banking-accounts-and-deposits-sc-lang-ar-eg.html",
+        "home-smes-retail-banking-accounts-and-deposits-sc-lang-ar-eg.txt"
+      ],
+      "html_bytes": 208360,
+      "text_chars": 2178,
       "link_count": 73
+    },
+    {
+      "requested_url": "https://www.banquemisr.com/Home/SMEs/Retail%20Banking/Consumer%20Loans?sc_lang=ar-EG",
+      "url": "https://www.banquemisr.com/Home/SMEs/Retail%20Banking/Consumer%20Loans?sc_lang=ar-EG",
+      "key": "banquemisr.com/home/smes/retail banking/consumer loans?sc_lang=ar-eg",
+      "status": 200,
+      "ok": true,
+      "content_type": "html",
+      "render_mode": "requests",
+      "error": null,
+      "fetched_at": "2026-08-21T18:43:36.967986+00:00",
+      "files": [
+        "home-smes-retail-banking-consumer-loans-sc-lang-ar-eg.html",
+        "home-smes-retail-banking-consumer-loans-sc-lang-ar-eg.txt"
+      ],
+      "html_bytes": 201663,
+      "text_chars": 3417,
+      "link_count": 72
+    },
+    {
+      "requested_url": "https://www.banquemisr.com/Home/SMEs/Retail%20Banking/Pages/Cards/Credit%20Cards%20List?sc_lang=ar-EG",
+      "url": "https://www.banquemisr.com/Home/SMEs/Retail%20Banking/Pages/Cards/Credit%20Cards%20List?sc_lang=ar-EG",
+      "key": "banquemisr.com/home/smes/retail banking/pages/cards/credit cards list?sc_lang=ar-eg",
+      "status": 200,
+      "ok": true,
+      "content_type": "html",
+      "render_mode": "requests",
+      "error": null,
+      "fetched_at": "2026-08-21T18:43:38.082964+00:00",
+      "files": [
+        "home-smes-retail-banking-pages-cards-credit-cards-list-sc-lang-ar-eg.html",
+        "home-smes-retail-banking-pages-cards-credit-cards-list-sc-lang-ar-eg.txt"
+      ],
+      "html_bytes": 218231,
+      "text_chars": 2284,
+      "link_count": 79
+    },
+    {
+      "requested_url": "https://www.banquemisr.com/Home/SMEs/Retail%20Banking/Pages/Cards/Credit%20Cards%20Pages/Classic%20Credit%20Cards?sc_lang=ar-EG",
+      "url": "https://www.banquemisr.com/Home/SMEs/Retail%20Banking/Pages/Cards/Credit%20Cards%20Pages/Classic%20Credit%20Cards?sc_lang=ar-EG",
+      "key": "banquemisr.com/home/smes/retail banking/pages/cards/credit cards pages/classic credit cards?sc_lang=ar-eg",
+      "status": 200,
+      "ok": true,
+      "content_type": "html",
+      "render_mode": "requests",
+      "error": null,
+      "fetched_at": "2026-08-21T18:43:39.941195+00:00",
+      "files": [
+        "home-smes-retail-banking-pages-cards-credit-cards-pages-classic-credit-cards-sc-lang-ar-eg.html",
+        "home-smes-retail-banking-pages-cards-credit-cards-pages-classic-credit-cards-sc-lang-ar-eg.txt"
+      ],
+      "html_bytes": 83422,
+      "text_chars": 6475,
+      "link_count": 80
+    },
+    {
+      "requested_url": "https://www.banquemisr.com/Home/SMEs/Retail%20Banking/Pages/Cards?sc_lang=ar-EG",
+      "url": "https://www.banquemisr.com/Home/SMEs/Retail%20Banking/Pages/Cards?sc_lang=ar-EG",
+      "key": "banquemisr.com/home/smes/retail banking/pages/cards?sc_lang=ar-eg",
+      "status": 200,
+      "ok": true,
+      "content_type": "html",
+      "render_mode": "requests",
+      "error": null,
+      "fetched_at": "2026-08-21T18:43:41.694296+00:00",
+      "files": [
+        "home-smes-retail-banking-pages-cards-sc-lang-ar-eg.html",
+        "home-smes-retail-banking-pages-cards-sc-lang-ar-eg.txt"
+      ],
+      "html_bytes": 239139,
+      "text_chars": 3975,
+      "link_count": 94
     },
     {
       "requested_url": "https://www.banquemisr.com/-/media/Guide-to-activate-Debit--and-Pre--paid-cards-through-the-ATM.ashx",
@@ -147,11 +280,27 @@
       "ok": false,
       "content_type": "pdf",
       "render_mode": "requests",
-      "error": "pdfplumber extracted no text (scanned or image-only PDF?)",
+      "error": "pdfplumber extracted no text (scanned or image-only PDF?) ; pypdf extracted no text",
       "files": [
         "media-guide-to-activate-debit-and-pre-paid-cards-through-the-atm-ashx.pdf"
       ],
       "pdf_bytes": 1835576
+    },
+    {
+      "requested_url": "https://www.banquemisr.com/-/media/Files/secure-code-AR.ashx",
+      "url": "https://www.banquemisr.com/-/media/Files/secure-code-AR.ashx",
+      "key": "banquemisr.com//media/files/secure code ar.ashx",
+      "status": 200,
+      "ok": true,
+      "content_type": "pdf",
+      "render_mode": "requests",
+      "error": null,
+      "files": [
+        "media-files-secure-code-ar-ashx.pdf",
+        "media-files-secure-code-ar-ashx.pdf.txt"
+      ],
+      "pdf_bytes": 266140,
+      "text_chars": 3006
     }
   ]
 }
