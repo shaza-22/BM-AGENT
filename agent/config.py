@@ -52,7 +52,7 @@ GEMINI_API_KEY_ENV = "GEMINI_API_KEY"
 ANTHROPIC_API_KEY_ENV = "ANTHROPIC_API_KEY"
 
 # Gemini. The free tier's usual workhorse; override if your quota differs.
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-3.6-flash"
 GEMINI_MAX_TOKENS = 4096
 
 # Claude. Link selection is a judgement call over a short list, not a research
