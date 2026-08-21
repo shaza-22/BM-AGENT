@@ -49,10 +49,21 @@ class LLMError(RuntimeError):
     the failure was the kind that retrying could have fixed.
     """
 
-    def __init__(self, message: str, *, status: int | None = None, retryable: bool = False) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: int | None = None,
+        retryable: bool = False,
+        retry_after: float | None = None,
+        quota_ids: tuple[str, ...] = (),
+    ) -> None:
         super().__init__(message)
         self.status = status
         self.retryable = retryable
+        # Seconds the provider asked us to wait, when it said so.
+        self.retry_after = retry_after
+        self.quota_ids = quota_ids
 
 
 def _status_of(exc: Exception) -> int | None:
@@ -77,6 +88,58 @@ def _status_of(exc: Exception) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def _error_details(exc: Exception) -> list[dict]:
+    """The google.rpc detail objects attached to an API error, if any.
+
+    Read structurally rather than by matching the message: the human-readable
+    text is unstable and, for quota failures, does not name the quota at all.
+    """
+    payload = getattr(exc, "details", None)
+    if isinstance(payload, dict):
+        inner = payload.get("error", payload)
+        payload = inner.get("details") if isinstance(inner, dict) else None
+    if not isinstance(payload, list):
+        return []
+    return [detail for detail in payload if isinstance(detail, dict)]
+
+
+def _quota_ids(exc: Exception) -> tuple[str, ...]:
+    ids: list[str] = []
+    for detail in _error_details(exc):
+        if "QuotaFailure" not in str(detail.get("@type", "")):
+            continue
+        for violation in detail.get("violations") or []:
+            if isinstance(violation, dict) and violation.get("quotaId"):
+                ids.append(str(violation["quotaId"]))
+    if not ids:
+        # Some transports fold the payload into the message; the field is still
+        # named there, so this reads the same field rather than guessing.
+        ids = re.findall(r'"quotaId"\s*:\s*"([^"]+)"', str(exc))
+    return tuple(ids)
+
+
+def _retry_after(exc: Exception) -> float | None:
+    """The delay a RetryInfo detail asked for, in seconds."""
+    for detail in _error_details(exc):
+        if "RetryInfo" not in str(detail.get("@type", "")):
+            continue
+        match = re.fullmatch(r"([\d.]+)s", str(detail.get("retryDelay", "")).strip())
+        if match:
+            return float(match.group(1))
+    match = re.search(r'"retryDelay"\s*:\s*"([\d.]+)s"', str(exc))
+    return float(match.group(1)) if match else None
+
+
+def _is_daily_quota(quota_id: str) -> bool:
+    # Separators are stripped from both sides so the same marker matches
+    # "PerDay", "per_day" and "per-day".
+    lowered = re.sub(r"[-_\s]", "", quota_id.lower())
+    return any(
+        re.sub(r"[-_\s]", "", marker.lower()) in lowered
+        for marker in config.LLM_DAILY_QUOTA_MARKERS
+    )
+
+
 def _looks_transient(exc: Exception) -> bool:
     """Whether a status-less failure is the kind a retry could fix.
 
@@ -97,6 +160,21 @@ def _as_llm_error(exc: Exception, provider: str) -> LLMError:
     if isinstance(exc, LLMError):
         return exc
     status = _status_of(exc)
+    quota_ids = _quota_ids(exc)
+
+    # A per-day quota does not refill in seconds, so backing off inside a run
+    # only spends time to fail anyway. Per-minute quotas are worth waiting out.
+    daily = [quota for quota in quota_ids if _is_daily_quota(quota)]
+    if daily:
+        return LLMError(
+            f"{provider} quota exhausted for the day (quotaId={daily[0]}). Retrying will "
+            f"not help: this quota refills on the provider's daily schedule, not in "
+            f"seconds. Wait for the reset, raise the quota, or switch model or provider.",
+            status=status,
+            retryable=False,
+            quota_ids=quota_ids,
+        )
+
     if status in config.LLM_PERMANENT_STATUS:
         retryable = False
     elif status in config.LLM_TRANSIENT_STATUS:
@@ -106,7 +184,11 @@ def _as_llm_error(exc: Exception, provider: str) -> LLMError:
     # `from None` at the raise site keeps the raw SDK error out of tracebacks;
     # its message is scrubbed of key-shaped text before it is carried over.
     return LLMError(
-        f"{provider} request failed: {scrub(str(exc))}", status=status, retryable=retryable
+        f"{provider} request failed: {scrub(str(exc))}",
+        status=status,
+        retryable=retryable,
+        retry_after=_retry_after(exc) if retryable else None,
+        quota_ids=quota_ids,
     )
 
 
@@ -138,13 +220,19 @@ def retry_api_call(
                 if error.retryable:
                     logger.error("%s call failed after %d attempts: %s", provider, total, error)
                 raise error from None
+            requested = error.retry_after
             delay = min(
-                config.LLM_RETRY_BACKOFF_S * (2 ** (attempt - 1)),
+                requested
+                if requested is not None
+                else config.LLM_RETRY_BACKOFF_S * (2 ** (attempt - 1)),
                 config.LLM_RETRY_MAX_BACKOFF_S,
             )
+            source = "server-requested" if requested is not None else "exponential"
+            if requested is not None and requested > delay:
+                source = f"server-requested {requested:.0f}s, capped"
             logger.warning(
-                "%s call failed (status=%s, attempt %d/%d): %s -- retrying in %.1fs",
-                provider, error.status, attempt, total, error, delay,
+                "%s call failed (status=%s, attempt %d/%d): %s -- retrying in %.1fs (%s)",
+                provider, error.status, attempt, total, error, delay, source,
             )
             if on_retry is not None:
                 on_retry(delay)
@@ -387,9 +475,16 @@ class _OptionRejected(Exception):
     client drops whichever the API named and retries once.
     """
 
-    def __init__(self, option: str, message: str) -> None:
-        super().__init__(message)
+    def __init__(self, option: str | None, error: LLMError) -> None:
+        super().__init__(str(error))
+        # None when the API refused the request without naming a field, which
+        # is what Google does: a bare "Request contains an invalid argument."
         self.option = option
+        self.error = error
+
+
+OPT_THINKING = "thinking"
+OPT_SCHEMA = "schema"
 
 
 class GeminiLLMClient(_TimedClient):
@@ -455,34 +550,78 @@ class GeminiLLMClient(_TimedClient):
     def complete(
         self, prompt: str, *, system: str | None = None, schema: dict | None = None
     ) -> str:
+        """Send one prompt, shedding optional settings the API will not accept.
+
+        Structured output and the thinking configuration are best-effort: they
+        improve the call where supported and must never cost it. Google refuses
+        an unsupported setting with a bare 400 -- "Request contains an invalid
+        argument." with no field named -- so which one is at fault cannot be
+        read from the message. Instead they are dropped one at a time, in
+        configured order, and the call retried after each.
+
+        A setting is only disabled for the rest of the run if dropping it
+        actually made the call succeed. If the request was malformed for some
+        unrelated reason, every setting is restored and the original error is
+        raised, so a bad request never silently degrades the run's quality.
+        """
         client = self._ensure_client()
         self.calls += 1
+        dropped: list[str] = []
 
-        # At most one attempt per optional setting, plus the bare call.
-        for _ in range(3):
+        while True:
             try:
-                return self._timed(lambda: self._generate(client, prompt, system, schema))
-            except _OptionRejected as exc:
-                logger.warning(
-                    "Gemini did not accept %s (%s); dropping it for the rest of the run",
-                    exc.option, exc,
+                result = self._timed(
+                    lambda: self._generate(client, prompt, system, schema, frozenset(dropped))
                 )
-                if exc.option == "response schema":
-                    self._structured_output = False
-                else:
-                    self.thinking_budget = None
-                    self.thinking_level = None
+            except _OptionRejected as exc:
+                candidate = exc.option or self._next_droppable(schema, dropped)
+                if candidate is None or candidate in dropped:
+                    # Nothing left to try; nothing was disabled along the way.
+                    raise exc.error from None
+                dropped.append(candidate)
+                logger.warning(
+                    "Gemini refused the request (%s) -- retrying without the %s setting%s",
+                    exc.error, candidate,
+                    "" if exc.option else " (the API named no field, so settings are shed in order)",
+                )
+                continue
 
-        # Unreachable in practice -- there are only two optional settings, so
-        # the loop always exits by succeeding or raising. Kept so an internal
-        # exception can never escape as one.
-        try:
-            return self._timed(lambda: self._generate(client, prompt, system, schema))
-        except _OptionRejected as exc:
-            raise LLMError(f"Gemini kept rejecting request settings: {exc}") from None
+            if dropped:
+                # Only now is it known that these were the problem.
+                for option in dropped:
+                    self._disable(option)
+                logger.warning(
+                    "Gemini: %s disabled for the rest of the run", " and ".join(dropped)
+                )
+            return result
+
+    def _in_use(self, option: str, schema: dict | None) -> bool:
+        if option == OPT_THINKING:
+            return self.thinking_budget is not None or self.thinking_level is not None
+        if option == OPT_SCHEMA:
+            return schema is not None and self._structured_output
+        return False
+
+    def _next_droppable(self, schema: dict | None, dropped: Sequence[str]) -> str | None:
+        for option in config.LLM_OPTIONAL_SETTING_DROP_ORDER:
+            if option not in dropped and self._in_use(option, schema):
+                return option
+        return None
+
+    def _disable(self, option: str) -> None:
+        if option == OPT_THINKING:
+            self.thinking_budget = None
+            self.thinking_level = None
+        elif option == OPT_SCHEMA:
+            self._structured_output = False
 
     def _generate(
-        self, client: Any, prompt: str, system: str | None, schema: dict | None
+        self,
+        client: Any,
+        prompt: str,
+        system: str | None,
+        schema: dict | None,
+        dropped: frozenset[str] = frozenset(),
     ) -> str:
         # Passed as a plain dict rather than types.GenerateContentConfig: the
         # SDK accepts either, and this keeps the whole call path free of any
@@ -492,16 +631,19 @@ class GeminiLLMClient(_TimedClient):
         if system:
             settings["system_instruction"] = system
 
-        used_schema = schema is not None and self._structured_output
+        used_schema = self._in_use(OPT_SCHEMA, schema) and OPT_SCHEMA not in dropped
         if used_schema:
             settings["response_mime_type"] = "application/json"
             settings["response_json_schema"] = schema
 
         thinking: dict[str, Any] = {}
-        if self.thinking_budget is not None:
-            thinking["thinking_budget"] = self.thinking_budget
-        if self.thinking_level is not None:
-            thinking["thinking_level"] = self.thinking_level
+        if OPT_THINKING in dropped:
+            pass
+        elif self.thinking_budget is not None or self.thinking_level is not None:
+            if self.thinking_budget is not None:
+                thinking["thinking_budget"] = self.thinking_budget
+            if self.thinking_level is not None:
+                thinking["thinking_level"] = self.thinking_level
         if thinking:
             settings["thinking_config"] = thinking
 
@@ -517,11 +659,12 @@ class GeminiLLMClient(_TimedClient):
                 on_retry=self._record_retry,
             )
         except LLMError as exc:
-            # A refused setting is a 400, so it is never retried; the option is
-            # dropped instead. Anything else propagates, already scrubbed.
-            option = _rejected_option(str(exc), used_schema, bool(thinking)) if not exc.retryable else None
-            if option:
-                raise _OptionRejected(option, str(exc)) from None
+            # A refused setting comes back as a 400, which is never retried.
+            # If any optional setting was sent, hand it to complete() to shed
+            # -- whether or not the API said which one it disliked.
+            if _is_bad_request(exc) and (used_schema or thinking):
+                named = _named_option(str(exc), used_schema, bool(thinking))
+                raise _OptionRejected(named, exc) from None
             raise
 
         logger.info(
@@ -536,17 +679,32 @@ class GeminiLLMClient(_TimedClient):
         return text
 
 
-def _rejected_option(message: str, used_schema: bool, used_thinking: bool) -> str | None:
-    """Which optional setting the API complained about, if any.
+def _is_bad_request(exc: LLMError) -> bool:
+    """Whether the provider rejected the request itself, rather than failing.
 
-    Only settings that were actually sent can be blamed, so an unrelated 400 is
-    never mistaken for one and silently degraded.
+    Structural, not textual: Google answers an unsupported setting with a bare
+    "Request contains an invalid argument." that names no field, so the status
+    is the only reliable signal.
+    """
+    if exc.retryable:
+        return False
+    if exc.status == 400:
+        return True
+    lowered = str(exc).lower()
+    return exc.status is None and ("invalid argument" in lowered or "invalid_argument" in lowered)
+
+
+def _named_option(message: str, used_schema: bool, used_thinking: bool) -> str | None:
+    """The setting the API named, when it named one -- a shortcut, not the rule.
+
+    Only a setting that was actually sent can be blamed. When nothing is named,
+    the caller sheds settings in order instead.
     """
     lowered = message.lower()
     if used_thinking and ("thinking" in lowered or "thought" in lowered):
-        return "the thinking configuration"
+        return OPT_THINKING
     if used_schema and ("schema" in lowered or "response_mime_type" in lowered):
-        return "response schema"
+        return OPT_SCHEMA
     return None
 
 

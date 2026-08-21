@@ -43,7 +43,7 @@ tests/               pytest suite, fully offline
 ```bash
 pip install -r requirements.txt
 cp .env.example .env                    # then paste your key into it
-pytest                                  # 337 tests, no network, no API key
+pytest                                  # 357 tests, no network, no API key
 python scripts/save_fixtures.py         # ONE-OFF, hits the live site
 ```
 
@@ -169,17 +169,51 @@ length, and the difference is most of the run.
 Each provider has a knob, and both are in `agent/config.py`:
 
 ```python
-GEMINI_THINKING_BUDGET = 0      # 0 turns reasoning off; None lets the model decide
-GEMINI_THINKING_LEVEL = None    # e.g. "low" — newer models take a level, not a budget
+GEMINI_THINKING_LEVEL = "low"   # what gemini-3.x takes
+GEMINI_THINKING_BUDGET = None   # what older models take; 0 turns reasoning off
 CLAUDE_EFFORT = "low"           # the Claude counterpart, already at the cheap setting
 ```
 
-The API changed shape between Gemini generations: older models take a token
-budget, newer ones a level. Whichever is set is sent, and if the API rejects it
-the client logs a warning, drops it for the rest of the run and carries on —
-the same contract as the schema fallback, so an unsupported setting costs the
-speedup and never the call. If your model rejects the budget, set
-`GEMINI_THINKING_LEVEL = "low"` instead.
+**`thinking_budget` is rejected by gemini-3.x** — with a bare 400, not a message
+that names it — so `thinking_level` is the working knob there. The budget is
+kept for older models. Measured on 3.6-flash: `thinking_level="low"` took a
+32.8s call down to **1.6s**, with choice quality and the arrival signal both
+intact. Whichever knob is set is sent; if the API refuses it the client drops it
+and carries on (see below), so an unsupported setting costs the speedup and
+never the call.
+
+### When the provider refuses a request
+
+Structured output and the thinking configuration are best-effort. Google refuses
+an unsupported one with a bare `400 INVALID_ARGUMENT: Request contains an
+invalid argument.` that names no field, so matching on the message cannot work.
+The handling is structural instead: **on any 400 where an optional setting was
+sent, they are dropped one at a time** — `LLM_OPTIONAL_SETTING_DROP_ORDER`,
+thinking first because it is the likelier culprit and the cheaper loss — and the
+call retried after each.
+
+A setting is only disabled for the rest of the run **if dropping it actually made
+the call succeed**. A request that was malformed for some unrelated reason
+restores everything and raises the original error, so a bad request never
+quietly degrades the run's quality. Shedding is not a retry: it does not count
+towards the retry budget and takes no backoff.
+
+### Quotas
+
+A 429 is inspected structurally, through the `google.rpc.QuotaFailure` detail
+rather than the message:
+
+- **Per-day quotas fail immediately.** `GenerateRequestsPerDayPerProjectPerModel`
+  does not refill in seconds, so backing off inside a run spends time to fail
+  anyway — it cost 14s across four attempts before this. The error names the
+  quota and says plainly that retrying will not help.
+- **Per-minute quotas are retried**, honouring `RetryInfo.retryDelay` when the
+  server sends one, capped at `LLM_RETRY_MAX_BACKOFF_S`. The log says which:
+
+```
+… -- retrying in 27.0s (server-requested)
+… -- retrying in 2.0s (exponential)
+```
 
 Claude's counterpart is `effort`, not a thinking switch. *Disabling* thinking on
 that model is deliberately not offered: with thinking off it can write a tool

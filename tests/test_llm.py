@@ -12,7 +12,16 @@ import types
 
 import pytest
 
-from conftest import FAKE_KEY, StubAnthropic, StubGemini, no_sleep, text_response
+from conftest import (
+    FAKE_KEY,
+    StubAnthropic,
+    StubGemini,
+    api_error,
+    bad_request,
+    no_sleep,
+    quota_error,
+    text_response,
+)
 
 from agent import config
 from agent.llm import (
@@ -162,7 +171,7 @@ class TestGeminiLLMClient:
     def test_schema_rejection_falls_back_to_defensive_parsing(self):
         # Structured output is a different binding on this API, so a rejection
         # must degrade to plain text rather than failing every hop.
-        stub = StubGemini(text='{"choice": 1}', error=ValueError("Invalid JSON schema supplied"),
+        stub = StubGemini(text='{"choice": 1}', error=bad_request("Invalid JSON schema supplied"),
                           errors_until=1)
         client = GeminiLLMClient(client=stub)
         assert client.complete("hi", schema={"type": "object"}) == '{"choice": 1}'
@@ -170,7 +179,7 @@ class TestGeminiLLMClient:
         assert "response_json_schema" not in stub.configs[1]
 
     def test_schema_rejection_is_remembered(self):
-        stub = StubGemini(text="{}", error=ValueError("Invalid JSON schema supplied"),
+        stub = StubGemini(text="{}", error=bad_request("Invalid JSON schema supplied"),
                           errors_until=1)
         client = GeminiLLMClient(client=stub)
         client.complete("one", schema={"type": "object"})
@@ -470,7 +479,7 @@ class TestClientsRetry:
         assert stub.calls == []          # never fell through to the non-beta path
 
     def test_gemini_schema_rejection_is_still_not_retried(self):
-        stub = StubGemini(text="{}", error=ValueError("Invalid JSON schema supplied"),
+        stub = StubGemini(text="{}", error=bad_request("Invalid JSON schema supplied"),
                           errors_until=1)
         client = GeminiLLMClient(client=stub, sleep=no_sleep)
         client.complete("hi", schema={"type": "object"})
@@ -512,7 +521,7 @@ class TestThinkingConfiguration:
 
     def test_the_budget_is_sent_when_configured(self):
         stub = StubGemini("ok")
-        GeminiLLMClient(client=stub, thinking_budget=0).complete("hi")
+        GeminiLLMClient(client=stub, thinking_budget=0, thinking_level=None).complete("hi")
         assert stub.configs[0]["thinking_config"] == {"thinking_budget": 0}
 
     def test_the_level_is_sent_when_configured(self):
@@ -531,26 +540,29 @@ class TestThinkingConfiguration:
         GeminiLLMClient(client=stub, thinking_budget=None, thinking_level=None).complete("hi")
         assert "thinking_config" not in stub.configs[0]
 
-    def test_the_default_comes_from_config(self):
+    def test_the_defaults_come_from_config(self):
         stub = StubGemini("ok")
         GeminiLLMClient(client=stub).complete("hi")
-        sent = stub.configs[0].get("thinking_config", {}).get("thinking_budget")
-        assert sent == config.GEMINI_THINKING_BUDGET
+        sent = stub.configs[0].get("thinking_config", {})
+        assert sent.get("thinking_budget") == config.GEMINI_THINKING_BUDGET
+        assert sent.get("thinking_level") == config.GEMINI_THINKING_LEVEL
 
     def test_a_rejected_thinking_config_degrades_instead_of_failing(self, caplog):
         # Same contract as the schema fallback: an unsupported setting must not
         # cost the call, only the speedup.
-        stub = StubGemini(text="ok", error=ValueError("thinking_budget is not supported"),
+        stub = StubGemini(text="ok", error=bad_request("thinking_budget is not supported"),
                           errors_until=1)
-        client = GeminiLLMClient(client=stub, thinking_budget=0, sleep=no_sleep)
+        client = GeminiLLMClient(client=stub, thinking_budget=0, thinking_level=None,
+                                 sleep=no_sleep)
         with caplog.at_level(logging.WARNING):
             assert client.complete("hi") == "ok"
         assert "thinking_config" in stub.configs[0]
         assert "thinking_config" not in stub.configs[1]
-        assert "thinking configuration" in caplog.text
+        assert "without the thinking setting" in caplog.text
+        assert "thinking disabled for the rest of the run" in caplog.text
 
     def test_a_rejected_thinking_config_is_remembered(self):
-        stub = StubGemini(text="ok", error=ValueError("thinking_level unsupported"), errors_until=1)
+        stub = StubGemini(text="ok", error=bad_request("thinking_level unsupported"), errors_until=1)
         client = GeminiLLMClient(client=stub, thinking_budget=0, sleep=no_sleep)
         client.complete("one")
         client.complete("two")
@@ -558,7 +570,7 @@ class TestThinkingConfiguration:
         assert sum(1 for c in stub.configs if "thinking_config" in c) == 1
 
     def test_schema_and_thinking_degrade_independently(self):
-        stub = StubGemini(text="ok", error=ValueError("Invalid JSON schema supplied"),
+        stub = StubGemini(text="ok", error=bad_request("Invalid JSON schema supplied"),
                           errors_until=1)
         client = GeminiLLMClient(client=stub, thinking_budget=0, sleep=no_sleep)
         client.complete("hi", schema={"type": "object"})
@@ -568,8 +580,7 @@ class TestThinkingConfiguration:
         assert client.thinking_budget == 0
 
     def test_an_unrelated_400_is_not_blamed_on_an_option(self):
-        error = ValueError("400 INVALID_ARGUMENT: contents must not be empty")
-        stub = StubGemini(text="ok", error=error)
+        stub = StubGemini(text="ok", error=bad_request("contents must not be empty"))
         client = GeminiLLMClient(client=stub, thinking_budget=0, sleep=no_sleep)
         with pytest.raises(LLMError):
             client.complete("hi", schema={"type": "object"})
@@ -577,9 +588,9 @@ class TestThinkingConfiguration:
         assert client._structured_output is True
 
     def test_a_transient_failure_is_not_mistaken_for_a_rejected_option(self):
-        error = RuntimeError("503 UNAVAILABLE thinking service")
-        error.code = 503
-        stub = StubGemini(text="ok", error=error, errors_until=1)
+        stub = StubGemini(
+            text="ok", error=api_error("503 UNAVAILABLE thinking service", code=503), errors_until=1
+        )
         client = GeminiLLMClient(client=stub, thinking_budget=0, sleep=no_sleep)
         client.complete("hi")
         assert client.thinking_budget == 0        # retried, not degraded
@@ -599,7 +610,9 @@ class TestPerCallLogging:
 
     def test_gemini_reports_the_default_when_no_budget_is_set(self, caplog):
         with caplog.at_level(logging.INFO, logger="agent.llm"):
-            GeminiLLMClient(client=StubGemini("ok"), thinking_budget=None).complete("hi")
+            GeminiLLMClient(
+                client=StubGemini("ok"), thinking_budget=None, thinking_level=None
+            ).complete("hi")
         assert "thinking=default" in caplog.text
 
     def test_claude_logs_the_same_shape_with_its_own_knob(self, caplog):
@@ -610,3 +623,178 @@ class TestPerCallLogging:
         assert "llm call provider=Claude" in caplog.text
         assert f"effort={config.CLAUDE_EFFORT}" in caplog.text
         assert "ms=" in caplog.text
+
+
+class TestBareBadRequestDegradation:
+    """Google refuses an unsupported setting without naming it.
+
+    The live symptom: a thinking_budget rejection came back as
+    "Request contains an invalid argument." and ended the run with
+    status="error" instead of dropping the setting and retrying.
+    """
+
+    def test_a_bare_400_sheds_settings_instead_of_failing(self, caplog):
+        stub = StubGemini(text="ok", error=bad_request(), errors_until=1)
+        client = GeminiLLMClient(client=stub, thinking_level="low", sleep=no_sleep)
+        with caplog.at_level(logging.WARNING):
+            assert client.complete("hi") == "ok"
+        assert "thinking_config" in stub.configs[0]
+        assert "thinking_config" not in stub.configs[1]
+        assert "named no field" in caplog.text
+
+    def test_settings_are_shed_in_configured_order(self):
+        # Thinking first: it is the more likely culprit and the cheaper loss.
+        stub = StubGemini(text="ok", error=bad_request(), errors_until=1)
+        client = GeminiLLMClient(client=stub, thinking_level="low", sleep=no_sleep)
+        client.complete("hi", schema={"type": "object"})
+        assert "thinking_config" not in stub.configs[1]
+        assert "response_json_schema" in stub.configs[1]   # schema survived
+
+    def test_a_second_bare_400_sheds_the_next_setting(self):
+        stub = StubGemini(text="ok", error=bad_request(), errors_until=2)
+        client = GeminiLLMClient(client=stub, thinking_level="low", sleep=no_sleep)
+        client.complete("hi", schema={"type": "object"})
+        assert len(stub.configs) == 3
+        assert "thinking_config" not in stub.configs[2]
+        assert "response_json_schema" not in stub.configs[2]
+
+    def test_a_genuinely_bad_request_still_fails(self):
+        stub = StubGemini(text="ok", error=bad_request("contents must not be empty"))
+        client = GeminiLLMClient(client=stub, thinking_level="low", sleep=no_sleep)
+        with pytest.raises(LLMError, match="must not be empty"):
+            client.complete("hi", schema={"type": "object"})
+
+    def test_nothing_is_disabled_when_shedding_did_not_help(self):
+        # A setting is only given up if dropping it actually fixed the call, so
+        # an unrelated bad request never quietly degrades the rest of the run.
+        stub = StubGemini(text="ok", error=bad_request("contents must not be empty"))
+        client = GeminiLLMClient(client=stub, thinking_level="low", sleep=no_sleep)
+        with pytest.raises(LLMError):
+            client.complete("hi", schema={"type": "object"})
+        assert client.thinking_level == "low"
+        assert client._structured_output is True
+
+    def test_a_400_with_no_optional_settings_sent_fails_immediately(self):
+        stub = StubGemini(text="ok", error=bad_request())
+        client = GeminiLLMClient(
+            client=stub, thinking_budget=None, thinking_level=None, sleep=no_sleep
+        )
+        with pytest.raises(LLMError):
+            client.complete("hi")
+        assert len(stub.configs) == 1
+
+    def test_shedding_is_not_a_retry(self):
+        # Dropping a setting is a different request, not the same one again --
+        # it must not be counted as, or delayed like, a transient retry.
+        stub = StubGemini(text="ok", error=bad_request(), errors_until=1)
+        client = GeminiLLMClient(client=stub, thinking_level="low", sleep=no_sleep)
+        client.complete("hi")
+        assert client.retries == 0
+        assert client.retry_wait_s == 0.0
+
+
+class TestQuotaHandling:
+    """A per-day quota does not refill in seconds.
+
+    The live symptom: exhausting GenerateRequestsPerDayPerProjectPerModel burned
+    14s across four attempts and failed anyway.
+    """
+
+    def test_a_daily_quota_fails_immediately(self):
+        stub = StubGemini(error=quota_error("GenerateRequestsPerDayPerProjectPerModel-FreeTier"))
+        client = GeminiLLMClient(client=stub, sleep=no_sleep)
+        with pytest.raises(LLMError) as excinfo:
+            client.complete("hi")
+
+        assert len(stub.configs) == 1          # no retries at all
+        assert client.retries == 0
+        assert client.retry_wait_s == 0.0
+        assert excinfo.value.retryable is False
+
+    def test_the_daily_message_says_what_to_do(self):
+        stub = StubGemini(error=quota_error("GenerateRequestsPerDayPerProjectPerModel-FreeTier"))
+        with pytest.raises(LLMError) as excinfo:
+            GeminiLLMClient(client=stub, sleep=no_sleep).complete("hi")
+        message = str(excinfo.value)
+        assert "exhausted for the day" in message
+        assert "GenerateRequestsPerDayPerProjectPerModel-FreeTier" in message
+        assert "Retrying will not help" in message
+
+    def test_a_per_minute_quota_is_still_retried(self):
+        stub = StubGemini(
+            text="ok",
+            error=quota_error("GenerateRequestsPerMinutePerProjectPerModel"),
+            errors_until=1,
+        )
+        client = GeminiLLMClient(client=stub, sleep=no_sleep)
+        assert client.complete("hi") == "ok"
+        assert client.retries == 1
+
+    def test_the_server_requested_delay_is_honoured(self):
+        delays: list[float] = []
+        stub = StubGemini(
+            text="ok",
+            error=quota_error("GenerateRequestsPerMinutePerProjectPerModel", retry_delay="27s"),
+            errors_until=1,
+        )
+        client = GeminiLLMClient(client=stub, sleep=delays.append)
+        client.complete("hi")
+        assert delays == [27.0]                # not the 2s exponential default
+
+    def test_a_server_delay_beyond_the_cap_is_capped(self):
+        delays: list[float] = []
+        stub = StubGemini(
+            text="ok",
+            error=quota_error("GenerateRequestsPerMinutePerProjectPerModel", retry_delay="600s"),
+            errors_until=1,
+        )
+        GeminiLLMClient(client=stub, sleep=delays.append).complete("hi")
+        assert delays == [config.LLM_RETRY_MAX_BACKOFF_S]
+
+    def test_the_retry_log_says_where_the_delay_came_from(self, caplog):
+        stub = StubGemini(
+            text="ok",
+            error=quota_error("GenerateRequestsPerMinutePerProjectPerModel", retry_delay="5s"),
+            errors_until=1,
+        )
+        with caplog.at_level(logging.WARNING):
+            GeminiLLMClient(client=stub, sleep=no_sleep).complete("hi")
+        assert "server-requested" in caplog.text
+
+    @pytest.mark.parametrize(
+        "quota_id",
+        [
+            "GenerateRequestsPerDayPerProjectPerModel",
+            "GenerateRequestsPerDayPerProjectPerModel-FreeTier",
+            "generate_requests_per_day_per_project",
+            "SomethingDailyLimit",
+        ],
+    )
+    def test_daily_quota_ids_are_recognised(self, quota_id):
+        stub = StubGemini(error=quota_error(quota_id))
+        with pytest.raises(LLMError, match="exhausted for the day"):
+            GeminiLLMClient(client=stub, sleep=no_sleep).complete("hi")
+
+    def test_a_429_without_quota_details_is_still_retried(self):
+        stub = StubGemini(text="ok", error=api_error("429 RESOURCE_EXHAUSTED", code=429),
+                          errors_until=1)
+        client = GeminiLLMClient(client=stub, sleep=no_sleep)
+        assert client.complete("hi") == "ok"
+        assert client.retries == 1
+
+    def test_quota_ids_are_carried_on_the_error(self):
+        stub = StubGemini(error=quota_error("GenerateRequestsPerDayPerProjectPerModel"))
+        with pytest.raises(LLMError) as excinfo:
+            GeminiLLMClient(client=stub, sleep=no_sleep).complete("hi")
+        assert excinfo.value.quota_ids == ("GenerateRequestsPerDayPerProjectPerModel",)
+
+    def test_quota_details_folded_into_the_message_are_still_read(self):
+        # Some transports drop the structured payload and keep only the text;
+        # the field is still named there.
+        error = api_error(
+            '429 RESOURCE_EXHAUSTED. {"quotaId": "GenerateRequestsPerDayPerProjectPerModel"}',
+            code=429,
+        )
+        stub = StubGemini(error=error)
+        with pytest.raises(LLMError, match="exhausted for the day"):
+            GeminiLLMClient(client=stub, sleep=no_sleep).complete("hi")

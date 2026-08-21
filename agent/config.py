@@ -65,8 +65,13 @@ GEMINI_MAX_TOKENS = 4096
 # reasoning off), newer ones take a level. Whichever is set is sent; if the API
 # rejects it, the client logs a warning, drops it and carries on, so a model
 # that supports neither still works.
-GEMINI_THINKING_BUDGET = None
-GEMINI_THINKING_LEVEL = "low"
+
+# gemini-3.x rejects thinking_budget outright (a bare 400), so the level is the
+# working knob there; the budget is kept for older models. Measured on 3.6-flash:
+# thinking_level="low" took a 32.8s call down to 1.6s with the choice quality and
+# the arrival signal both intact.
+GEMINI_THINKING_BUDGET: int | None = None
+GEMINI_THINKING_LEVEL: str | None = "low"
 
 # Claude. Link selection is a judgement call over a short list, not a research
 # task, so low effort keeps adaptive thinking brief. Note: do NOT disable
@@ -98,6 +103,15 @@ LLM_PERMANENT_STATUS: frozenset[int] = frozenset({400, 401, 403, 404, 405, 422})
 LLM_TRANSIENT_STATUS_NAMES: frozenset[str] = frozenset(
     {"UNAVAILABLE", "RESOURCE_EXHAUSTED", "INTERNAL", "DEADLINE_EXCEEDED", "ABORTED"}
 )
+
+# When a request is refused with a 400 that names no field, optional settings
+# are dropped one at a time in this order and the call retried, most-likely
+# culprit first. The schema comes last because losing it costs the most.
+LLM_OPTIONAL_SETTING_DROP_ORDER: tuple[str, ...] = ("thinking", "schema")
+
+# A quota whose id matches one of these refills on a daily schedule, so no
+# amount of backing off inside one run will clear it.
+LLM_DAILY_QUOTA_MARKERS: tuple[str, ...] = ("perday", "per_day", "daily")
 
 # --- Candidate ranking weights ---------------------------------------------
 # Additive score; higher is offered sooner. All signals are structural.
