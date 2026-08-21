@@ -540,7 +540,8 @@ class TestTimingBreakdown:
         timing = result.stats["timing"]
         assert set(timing) == {
             "total_s", "page_request_s", "page_rate_limit_wait_s", "page_retry_wait_s",
-            "robots_s", "llm_s", "llm_retry_wait_s", "llm_retries",
+            "robots_s", "pdf_text_s", "html_parse_s", "link_extract_s",
+            "llm_s", "llm_retry_wait_s", "llm_retries",
         }
         assert timing["total_s"] >= 0.0
         assert timing["page_rate_limit_wait_s"] == 0.0   # delay disabled in tests

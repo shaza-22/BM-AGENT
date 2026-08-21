@@ -72,6 +72,26 @@ NO_RETRY_STATUS: frozenset[int] = frozenset({400, 401, 403, 404, 405, 410})
 # Refuse to buffer anything absurd (a video, a disk image) into memory.
 MAX_CONTENT_BYTES = 25 * 1024 * 1024
 
+# --- PDF extraction --------------------------------------------------------
+# pdfplumber keeps column structure, which is why it is preferred: a fee table
+# flattened into prose is unreadable. But its per-page layout analysis is
+# expensive and the cost grows with the document.
+#
+# Measured on an 84-page, 6.9MB tariff (129k characters of text):
+#   pdfplumber, text + tables   24.4s      full structure
+#   pdfplumber, text only       15.3s      no table rendering
+#   pypdf, text only             6.3s      all the content, flat
+# On a 7-page document the same comparison is 1.8s / 1.2s / 2.2s -- pypdf is
+# actually slower there. So the right extractor depends on size, and above this
+# page count the run switches to the flat-text path: no content is lost, only
+# column alignment, and a document this large is past the point where the text
+# would be handed to a model whole anyway.
+PDF_FIDELITY_MAX_PAGES = 25
+
+# Table rendering is 37% of pdfplumber's cost. Turning it off keeps the prose
+# and loses the column structure that makes a fee row readable.
+PDF_EXTRACT_TABLES = True
+
 # --- Render-escalation thresholds -----------------------------------------
 # From an earlier survey, ~1931 pages parsed fine with plain requests and only
 # ~65 needed a headless browser. Escalating unconditionally would pay browser

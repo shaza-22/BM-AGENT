@@ -21,7 +21,7 @@ from browsing.fetcher import (
     html_to_text,
     pdf_to_text,
 )
-from conftest import FakeResponse, FakeSession, html_response, minimal_pdf
+from conftest import FakeResponse, FakeSession, grow_pdf, html_response, minimal_pdf
 
 HOME = "https://www.banquemisr.com/"
 PAGE = "https://www.banquemisr.com/Home/Pages/Fees"
@@ -431,6 +431,69 @@ class TestRateLimiter:
         assert time.monotonic() - started >= 0.04
 
 
+class TestPdfExtractionStrategy:
+    """Which extractor runs depends on the document's size.
+
+    Measured on an 84-page tariff: pdfplumber keeps table columns but takes
+    24.4s, where pypdf takes 6.3s and loses only the column alignment. On a
+    7-page document the comparison reverses (1.8s against 2.2s), so neither is
+    simply better -- the size decides.
+    """
+
+    def small_pdf(self):
+        return minimal_pdf(["Tariff of charges", "Annual fee 300 EGP"])
+
+    def test_a_small_pdf_keeps_the_high_fidelity_extractor(self, caplog):
+        with caplog.at_level(logging.INFO, logger="browsing.fetcher"):
+            text, error = pdf_to_text(self.small_pdf())
+        assert error is None
+        assert "Annual fee 300 EGP" in text
+        assert "fast flat-text extractor" not in caplog.text
+
+    def test_a_large_pdf_switches_to_the_fast_extractor(self, caplog, monkeypatch):
+        monkeypatch.setattr(config, "PDF_FIDELITY_MAX_PAGES", 2)
+        big = grow_pdf(self.small_pdf(), 5)
+        with caplog.at_level(logging.INFO, logger="browsing.fetcher"):
+            text, error = pdf_to_text(big)
+        assert error is None
+        assert "Tariff of charges" in text
+        assert "fast flat-text extractor" in caplog.text
+        assert "columns will not be preserved" in caplog.text
+
+    def test_the_threshold_is_configurable(self, monkeypatch, caplog):
+        monkeypatch.setattr(config, "PDF_FIDELITY_MAX_PAGES", 500)
+        with caplog.at_level(logging.INFO, logger="browsing.fetcher"):
+            pdf_to_text(grow_pdf(self.small_pdf(), 5))
+        assert "fast flat-text extractor" not in caplog.text
+
+    def test_no_content_is_lost_on_the_fast_path(self, monkeypatch):
+        # The fast path trades column structure for speed, never content.
+        big = grow_pdf(minimal_pdf(["Alpha fee 10", "Beta fee 20", "Gamma fee 30"]), 4)
+        monkeypatch.setattr(config, "PDF_FIDELITY_MAX_PAGES", 500)
+        slow, _ = pdf_to_text(big)
+        monkeypatch.setattr(config, "PDF_FIDELITY_MAX_PAGES", 1)
+        fast, _ = pdf_to_text(big)
+        for needle in ("Alpha fee 10", "Beta fee 20", "Gamma fee 30"):
+            assert needle in slow and needle in fast
+
+    def test_table_rendering_can_be_turned_off(self, monkeypatch):
+        monkeypatch.setattr(config, "PDF_EXTRACT_TABLES", False)
+        text, error = pdf_to_text(self.small_pdf())
+        assert error is None
+        assert "[table]" not in (text or "")
+
+    def test_a_broken_pdf_still_reports_an_error(self):
+        text, error = pdf_to_text(b"%PDF-1.4\ntruncated")
+        assert text is None
+        assert error
+
+    def test_an_unreadable_page_count_falls_back_to_the_normal_path(self, monkeypatch):
+        # A document pypdf cannot open must not skip extraction entirely.
+        monkeypatch.setattr("browsing.fetcher._page_count", lambda _content: None)
+        text, error = pdf_to_text(self.small_pdf())
+        assert error is None and "Annual fee 300 EGP" in text
+
+
 class TestTimingVisibility:
     """A slow run must be attributable without a stopwatch.
 
@@ -513,3 +576,41 @@ class TestModuleApi:
         assert "key=banquemisr.com/home/pages/fees" in caplog.text
         assert f"url={PAGE}" in caplog.text
         assert "render=requests" in caplog.text
+
+
+class TestWorkTimingIsAttributed:
+    """The "unaccounted" bucket hid the dominant cost of a run.
+
+    A 129k-character PDF took 19.7s of a 28.5s run, and the breakdown could not
+    say so.
+    """
+
+    def test_pdf_extraction_is_reported_separately(self):
+        url = "https://www.banquemisr.com/Home/Pages/tariff.pdf"
+        pdf = minimal_pdf(["Tariff of charges", "Annual fee 300 EGP"])
+        response = FakeResponse(url, content=pdf, content_type="application/pdf")
+        fetcher, _ = make_fetcher({url: response})
+        fetcher.fetch(url)
+
+        stats = fetcher.stats
+        assert stats["pdf_text_s"] > 0.0
+        assert stats["html_parse_s"] == 0.0      # not an HTML page
+        assert stats["link_extract_s"] == 0.0
+
+    def test_html_parsing_and_link_extraction_are_reported_separately(self):
+        # A page big enough that the work is unambiguously measurable.
+        body = "".join(f'<p>Paragraph {i}</p><a href="/p{i}">Link {i}</a>' for i in range(400))
+        fetcher, _ = make_fetcher({PAGE: html_response(PAGE, f"<html><body>{body}</body></html>")})
+        fetcher.fetch(PAGE)
+
+        stats = fetcher.stats
+        assert stats["html_parse_s"] > 0.0
+        assert stats["link_extract_s"] > 0.0
+        assert stats["pdf_text_s"] == 0.0
+
+    def test_the_fetch_line_carries_both(self, caplog):
+        fetcher, _ = make_fetcher({PAGE: html_response(PAGE, padded("<h1>Fees</h1>"))})
+        with caplog.at_level(logging.INFO, logger="browsing.fetcher"):
+            fetcher.fetch(PAGE)
+        assert "parse_ms=" in caplog.text
+        assert "pdf_ms=" in caplog.text

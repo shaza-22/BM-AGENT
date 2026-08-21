@@ -232,6 +232,21 @@ def bad_request(message: str = "Request contains an invalid argument.") -> Excep
     return api_error(f"400 INVALID_ARGUMENT. {message}", code=400)
 
 
+def grow_pdf(content: bytes, copies: int) -> bytes:
+    """Repeat a PDF's pages, to build a document large enough to change path."""
+    import io
+
+    from pypdf import PdfReader, PdfWriter
+
+    writer = PdfWriter()
+    for _ in range(copies):
+        for page in PdfReader(io.BytesIO(content)).pages:
+            writer.add_page(page)
+    buffer = io.BytesIO()
+    writer.write(buffer)
+    return buffer.getvalue()
+
+
 def no_sleep(_seconds: float) -> None:
     """Substituted for time.sleep so retry tests never actually wait."""
 

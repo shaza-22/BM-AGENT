@@ -206,7 +206,8 @@ def main() -> int:
         accounted = sum(
             float(timing.get(key, 0.0))
             for key in ("page_request_s", "page_rate_limit_wait_s", "page_retry_wait_s",
-                        "robots_s", "llm_s", "llm_retry_wait_s")
+                        "robots_s", "pdf_text_s", "html_parse_s", "link_extract_s",
+                        "llm_s", "llm_retry_wait_s")
         )
         print("time     :")
         print(f"  model calls           {timing.get('llm_s', 0):>7.1f}s"
@@ -219,8 +220,11 @@ def main() -> int:
               f"  (1-2s between requests to the same host)")
         print(f"  page retry backoff    {timing.get('page_retry_wait_s', 0):>7.1f}s")
         print(f"  robots.txt            {timing.get('robots_s', 0):>7.1f}s")
+        print(f"  pdf extraction        {timing.get('pdf_text_s', 0):>7.1f}s")
+        print(f"  html parsing          {timing.get('html_parse_s', 0):>7.1f}s")
+        print(f"  link extraction       {timing.get('link_extract_s', 0):>7.1f}s")
         print(f"  unaccounted           {max(0.0, timing.get('total_s', 0) - accounted):>7.1f}s"
-              f"  (parsing, extraction, validation)")
+              f"  (validation, everything else)")
     if result.extracted:
         print(f"extracted: {result.extracted}")
     print("sources  :")

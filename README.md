@@ -43,7 +43,7 @@ tests/               pytest suite, fully offline
 ```bash
 pip install -r requirements.txt
 cp .env.example .env                    # then paste your key into it
-pytest                                  # 357 tests, no network, no API key
+pytest                                  # 370 tests, no network, no API key
 python scripts/save_fixtures.py         # ONE-OFF, hits the live site
 ```
 
@@ -133,10 +133,11 @@ against a requests-per-minute quota. Only three things ever sleep:
 So a 3-page, 3-call run spends 2–4s on pacing. If it takes minutes, the time is
 in the model, the site, or retries — and each is now reported separately.
 
-Every fetch line splits the total:
+Every fetch line splits the total, including the work done on the bytes after
+they arrive:
 
 ```
-fetch url=… wait_ms=1400 retry_ms=0 req_ms=6100 ms=7600
+fetch url=… wait_ms=1400 retry_ms=0 req_ms=6100 parse_ms=95 pdf_ms=0 ms=7600
 rate-limit wait host=www.banquemisr.com slept=1.42s (politeness delay …; not a retry)
 ```
 
@@ -151,7 +152,10 @@ time     :
   politeness pacing         0.0s  (1-2s between requests to the same host)
   page retry backoff        0.0s
   robots.txt                0.0s
-  unaccounted               0.0s  (parsing, extraction, validation)
+  pdf extraction            0.0s
+  html parsing              0.0s
+  link extraction           0.0s
+  unaccounted               0.0s  (validation, everything else)
 ```
 
 If `model retry backoff` dominates, the endpoint is failing and
@@ -226,6 +230,44 @@ Every call reports itself, so before/after is measurable without a stopwatch:
 llm call provider=Gemini model=gemini-3.6-flash ms=3421 thinking=off schema=on
 llm call provider=Claude model=claude-opus-5   ms=2100 effort=low  schema=on
 ```
+
+### PDF extraction is the expensive part of a hop
+
+Measured on an 84-page, 6.9MB tariff (~129k characters):
+
+| | time | keeps |
+|---|---|---|
+| pdfplumber, text + tables | 24.4s | column structure |
+| pdfplumber, text only | 15.3s | prose only |
+| pypdf, text only | **6.3s** | all the content, flat |
+
+On a *7-page* document the same comparison is 1.8s / 1.2s / 2.2s — pypdf is
+slower there. Neither extractor is simply better; the document's size decides,
+so `pdf_to_text` picks by page count:
+
+```python
+PDF_FIDELITY_MAX_PAGES = 25   # above this, use the fast flat-text path
+PDF_EXTRACT_TABLES = True     # table rendering is 37% of pdfplumber's cost
+```
+
+Below the threshold, pdfplumber keeps the column structure that makes a fee row
+readable — the reason PDFs are worth following at all. Above it, the run
+switches to pypdf: **no content is lost, only column alignment**, and a document
+that large is past the point where its text would be handed to a model whole.
+Counting the pages first costs ~45ms. The choice is logged, so a slow or flat
+extraction is never a mystery:
+
+```
+pdf has 84 pages (over the 25-page fidelity limit) -- using the fast flat-text
+extractor; table columns will not be preserved
+```
+
+Measured end to end on that document: **22.4s → 5.3s**, and the extracted text
+halves too (285k → 140k characters), because table rendering deliberately
+overlaps the flat pass.
+
+If you need full table fidelity on a long document, raise
+`PDF_FIDELITY_MAX_PAGES` and accept the time.
 
 ### Provider differences worth knowing
 

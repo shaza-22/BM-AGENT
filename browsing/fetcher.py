@@ -76,17 +76,25 @@ class FetchTiming:
     """Where the wall-clock of one fetch went.
 
     Kept apart because they have different causes and different fixes: a
-    politeness wait is our own pacing, a retry wait is the site failing, and
-    request time is the site being slow.
+    politeness wait is our own pacing, a retry wait is the site failing,
+    request time is the site being slow, and the last three are work this code
+    does after the bytes arrive -- which on a large PDF dominates everything
+    else.
     """
 
     wait_s: float = 0.0
     retry_wait_s: float = 0.0
     request_s: float = 0.0
+    pdf_text_s: float = 0.0
+    html_parse_s: float = 0.0
+    link_extract_s: float = 0.0
 
     @property
     def total_s(self) -> float:
-        return self.wait_s + self.retry_wait_s + self.request_s
+        return (
+            self.wait_s + self.retry_wait_s + self.request_s
+            + self.pdf_text_s + self.html_parse_s + self.link_extract_s
+        )
 
 
 class PageDict(TypedDict):
@@ -214,55 +222,100 @@ def _charset_candidates(content: bytes, content_type_header: str) -> list[str]:
 # --------------------------------------------------------------------------
 # PDF text
 # --------------------------------------------------------------------------
-def pdf_to_text(content: bytes) -> tuple[str | None, str | None]:
-    """Extract text from PDF bytes. Returns ``(text, error)``.
+def _page_count(content: bytes) -> int | None:
+    """Pages in a PDF, or None if it cannot be read cheaply.
 
-    pdfplumber first: fee schedules on this site are tables, and pdfplumber
-    keeps column structure that a flat text dump destroys. pypdf is the
-    fallback so a missing optional dependency degrades instead of failing.
+    Costs ~45ms on a 7MB document -- only the cross-reference table is parsed --
+    which is worth paying to pick the right extractor for the size.
     """
-    error: str | None = None
-
-    try:
-        import pdfplumber
-    except ImportError:
-        error = "pdfplumber not installed"
-    else:
-        try:
-            parts: list[str] = []
-            with pdfplumber.open(io.BytesIO(content)) as pdf:
-                for page in pdf.pages:
-                    page_text = page.extract_text() or ""
-                    if page_text.strip():
-                        parts.append(page_text)
-                    for table in page.extract_tables() or []:
-                        rendered = _render_rows(table)
-                        # Deliberately overlaps extract_text(): the flat pass
-                        # loses column alignment, so the delimited copy is what
-                        # makes a fee row readable downstream.
-                        if rendered:
-                            parts.append("[table]\n" + rendered)
-            text = "\n".join(parts).strip()
-            if text:
-                return text, None
-            error = "pdfplumber extracted no text (scanned or image-only PDF?)"
-        except Exception as exc:  # pdfplumber raises a wide variety of errors
-            error = f"pdfplumber failed: {exc}"
-
     try:
         from pypdf import PdfReader
     except ImportError:
-        return None, error or "no PDF library installed"
+        return None
+    try:
+        return len(PdfReader(io.BytesIO(content)).pages)
+    except Exception:
+        return None
 
+
+def _pdfplumber_text(content: bytes, *, extract_tables: bool) -> tuple[str | None, str | None]:
+    """High-fidelity extraction: keeps the column structure of tables."""
+    try:
+        import pdfplumber
+    except ImportError:
+        return None, "pdfplumber not installed"
+
+    try:
+        parts: list[str] = []
+        with pdfplumber.open(io.BytesIO(content)) as pdf:
+            for page in pdf.pages:
+                page_text = page.extract_text() or ""
+                if page_text.strip():
+                    parts.append(page_text)
+                if not extract_tables:
+                    continue
+                for table in page.extract_tables() or []:
+                    rendered = _render_rows(table)
+                    # Deliberately overlaps extract_text(): the flat pass loses
+                    # column alignment, so the delimited copy is what makes a
+                    # fee row readable downstream.
+                    if rendered:
+                        parts.append("[table]\n" + rendered)
+        text = "\n".join(parts).strip()
+        if text:
+            return text, None
+        return None, "pdfplumber extracted no text (scanned or image-only PDF?)"
+    except Exception as exc:  # pdfplumber raises a wide variety of errors
+        return None, f"pdfplumber failed: {exc}"
+
+
+def _pypdf_text(content: bytes) -> tuple[str | None, str | None]:
+    """Fast extraction: all of the content, none of the column structure."""
+    try:
+        from pypdf import PdfReader
+    except ImportError:
+        return None, "pypdf not installed"
     try:
         reader = PdfReader(io.BytesIO(content))
         text = "\n".join((page.extract_text() or "") for page in reader.pages).strip()
-        if text:
-            logger.info("pdf fallback to pypdf succeeded (%s)", error)
-            return text, None
-        return None, error or "pypdf extracted no text"
+        return (text, None) if text else (None, "pypdf extracted no text")
     except Exception as exc:
-        return None, f"{error or ''} ; pypdf failed: {exc}".strip(" ;")
+        return None, f"pypdf failed: {exc}"
+
+
+def pdf_to_text(content: bytes) -> tuple[str | None, str | None]:
+    """Extract text from PDF bytes. Returns ``(text, error)``.
+
+    Which extractor runs depends on the document's size, because the right
+    answer changes with it: pdfplumber keeps the table structure that makes a
+    fee schedule readable, but its layout analysis dominates a long document
+    (measured: 24.4s against pypdf's 6.3s on 84 pages, and the other way round
+    on 7). Above :data:`config.PDF_FIDELITY_MAX_PAGES` the fast path is used --
+    the full text, without column alignment -- and the choice is logged so a
+    slow or flat extraction is never a mystery.
+    """
+    pages = _page_count(content)
+
+    if pages is not None and pages > config.PDF_FIDELITY_MAX_PAGES:
+        logger.info(
+            "pdf has %d pages (over the %d-page fidelity limit) -- using the fast "
+            "flat-text extractor; table columns will not be preserved",
+            pages, config.PDF_FIDELITY_MAX_PAGES,
+        )
+        text, error = _pypdf_text(content)
+        if text:
+            return text, None
+        logger.warning("fast pdf extraction failed (%s); falling back to pdfplumber", error)
+
+    text, error = _pdfplumber_text(content, extract_tables=config.PDF_EXTRACT_TABLES)
+    if text:
+        return text, None
+
+    fallback_text, fallback_error = _pypdf_text(content)
+    if fallback_text:
+        logger.info("pdf fallback to pypdf succeeded (%s)", error)
+        return fallback_text, None
+    return None, f"{error or ''} ; {fallback_error or ''}".strip(" ;")
 
 
 # --------------------------------------------------------------------------
@@ -347,6 +400,9 @@ class Fetcher:
             "retry_wait_s": 0.0,
             "request_s": 0.0,
             "robots_s": 0.0,
+            "pdf_text_s": 0.0,
+            "html_parse_s": 0.0,
+            "link_extract_s": 0.0,
         }
 
     # -- public ------------------------------------------------------------
@@ -355,10 +411,14 @@ class Fetcher:
         """Counters for the run report (how often the browser was needed).
 
         ``rate_limit_wait_s`` is our own politeness pacing, ``retry_wait_s`` is
-        time spent backing off after a failure, and ``request_s`` is the site
-        being slow. Keeping them apart is what makes a long run explainable.
+        time spent backing off after a failure, ``request_s`` is the site being
+        slow, and ``pdf_text_s``/``html_parse_s``/``link_extract_s`` are this
+        code's own work on the bytes. Keeping them apart is what makes a long
+        run explainable.
         """
-        return {**self._stats, **{k: round(v, 2) for k, v in self._timing.items()}}
+        # Millisecond resolution: rounding to hundredths reported a 6ms parse
+        # as 0.0, which reads as "did not happen" rather than "was fast".
+        return {**self._stats, **{k: round(v, 3) for k, v in self._timing.items()}}
 
     def clear_cache(self) -> None:
         self._cache.clear()
@@ -400,6 +460,9 @@ class Fetcher:
         self._timing["rate_limit_wait_s"] += timing.wait_s
         self._timing["retry_wait_s"] += timing.retry_wait_s
         self._timing["request_s"] += timing.request_s
+        self._timing["pdf_text_s"] += timing.pdf_text_s
+        self._timing["html_parse_s"] += timing.html_parse_s
+        self._timing["link_extract_s"] += timing.link_extract_s
         if not result["ok"]:
             self._stats["errors"] += 1
         self._log(result, key, link_count, started, timing, cache="miss")
@@ -566,7 +629,9 @@ class Fetcher:
 
         if kind == "pdf":
             self._stats["pdfs"] += 1
+            pdf_started = time.perf_counter()
             text, pdf_error = pdf_to_text(content)
+            timing.pdf_text_s += time.perf_counter() - pdf_started
             return (
                 PageDict(
                     url=final_url,
@@ -601,8 +666,12 @@ class Fetcher:
             )
 
         raw_html = _decode(content, header)
+        parse_started = time.perf_counter()
         text = html_to_text(raw_html)
+        timing.html_parse_s += time.perf_counter() - parse_started
+        link_started = time.perf_counter()
         links = extract_links(raw_html, final_url)
+        timing.link_extract_s += time.perf_counter() - link_started
         raw_html, text, link_count, render_mode = self._maybe_escalate(
             final_url, raw_html, text, len(links)
         )
@@ -730,14 +799,15 @@ class Fetcher:
         spellings of one page, or a token that survived stripping) is visible
         directly in the step log instead of needing a reproduction.
 
-        ``wait_ms``/``retry_ms``/``req_ms`` break the total down, so a slow hop
-        can be attributed to our own pacing, to backing off after a failure, or
-        to the site itself, without guessing.
+        ``wait_ms``/``retry_ms``/``req_ms``/``parse_ms``/``pdf_ms`` break the
+        total down, so a slow hop can be attributed to our own pacing, to
+        backing off after a failure, to the site itself, or to the work done on
+        the bytes once they arrive -- without guessing.
         """
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         logger.info(
             "fetch url=%s key=%s status=%s ok=%s type=%s render=%s cache=%s links=%d text=%d "
-            "wait_ms=%d retry_ms=%d req_ms=%d ms=%d%s",
+            "wait_ms=%d retry_ms=%d req_ms=%d parse_ms=%d pdf_ms=%d ms=%d%s",
             result["url"],
             key,
             result["status"],
@@ -750,6 +820,8 @@ class Fetcher:
             int(timing.wait_s * 1000),
             int(timing.retry_wait_s * 1000),
             int(timing.request_s * 1000),
+            int((timing.html_parse_s + timing.link_extract_s) * 1000),
+            int(timing.pdf_text_s * 1000),
             elapsed_ms,
             f" error={result['error']!r}" if result["error"] else "",
         )

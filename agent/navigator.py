@@ -212,6 +212,7 @@ class Navigator:
         )
 
         run_started = time.perf_counter()
+        nav_link_extract_s = 0.0
         pages_fetched = 0
         hops_used = 0
         current_page: PageDict | None = None
@@ -225,11 +226,17 @@ class Navigator:
             self._mark_visited(next_url, visited, alias_visited)
             self._mark_visited(page["url"], visited, alias_visited)
 
+            link_started = time.perf_counter()
             links = (
                 extract_links(page["raw_html"], page["url"])
                 if page["ok"] and page["raw_html"]
                 else []
             )
+            # The fetcher already extracted these once for the escalation
+            # check; re-extracting costs ~55ms on a 300KB page. Counted here
+            # rather than hidden, so the duplication is visible if it ever
+            # matters.
+            nav_link_extract_s += time.perf_counter() - link_started
 
             if page["ok"] and self._looks_blocked(page, len(links)):
                 # Continuing would hammer a WAF that has already flagged us,
@@ -242,7 +249,7 @@ class Navigator:
                 self._log.emit("step", **step.to_dict())
                 logger.warning("WAF block page detected at %s -- aborting run", page["url"])
                 return self._finish(
-                    "blocked", None, trail, pages_fetched, hops_used, None, sub_goal, run_started=run_started,
+                    "blocked", None, trail, pages_fetched, hops_used, None, sub_goal, run_started=run_started, nav_link_extract_s=nav_link_extract_s,
                     final_reasoning="The site returned an access-denied page; stopping to avoid a ban.",
                 )
 
@@ -259,7 +266,7 @@ class Navigator:
             if resolved:
                 return self._finish(
                     "resolved", page, trail, pages_fetched, hops_used,
-                    verdict.get("extracted") or {}, sub_goal, run_started=run_started,
+                    verdict.get("extracted") or {}, sub_goal, run_started=run_started, nav_link_extract_s=nav_link_extract_s,
                     final_reasoning=str(verdict.get("reason") or "sub-goal resolved"),
                 )
 
@@ -273,13 +280,13 @@ class Navigator:
 
             if hops_used >= self._max_hops:
                 return self._finish(
-                    "exhausted", None, trail, pages_fetched, hops_used, None, sub_goal, run_started=run_started,
+                    "exhausted", None, trail, pages_fetched, hops_used, None, sub_goal, run_started=run_started, nav_link_extract_s=nav_link_extract_s,
                     cap_hit="hops",
                     final_reasoning=f"Reached the maximum of {self._max_hops} hops without resolving the sub-goal.",
                 )
             if pages_fetched >= self._max_pages:
                 return self._finish(
-                    "exhausted", None, trail, pages_fetched, hops_used, None, sub_goal, run_started=run_started,
+                    "exhausted", None, trail, pages_fetched, hops_used, None, sub_goal, run_started=run_started, nav_link_extract_s=nav_link_extract_s,
                     cap_hit="pages",
                     final_reasoning=f"Reached the maximum of {self._max_pages} pages without resolving the sub-goal.",
                 )
@@ -302,7 +309,7 @@ class Navigator:
             except LLMError as exc:
                 logger.error("link selection failed: %s", exc)
                 return self._finish(
-                    "error", None, trail, pages_fetched, hops_used, None, sub_goal, run_started=run_started,
+                    "error", None, trail, pages_fetched, hops_used, None, sub_goal, run_started=run_started, nav_link_extract_s=nav_link_extract_s,
                     final_reasoning=f"The language model could not be reached: {exc}",
                 )
 
@@ -336,11 +343,11 @@ class Navigator:
                 # last fetch failed there is nothing to have arrived at.
                 if selection.outcome == "arrived" and current_page is not None:
                     return self._finish(
-                        "arrived", current_page, trail, pages_fetched, hops_used, None, sub_goal, run_started=run_started,
+                        "arrived", current_page, trail, pages_fetched, hops_used, None, sub_goal, run_started=run_started, nav_link_extract_s=nav_link_extract_s,
                         final_reasoning=selection.reasoning,
                     )
                 return self._finish(
-                    "no_candidates", None, trail, pages_fetched, hops_used, None, sub_goal, run_started=run_started,
+                    "no_candidates", None, trail, pages_fetched, hops_used, None, sub_goal, run_started=run_started, nav_link_extract_s=nav_link_extract_s,
                     final_reasoning=selection.reasoning,
                 )
 
@@ -357,7 +364,7 @@ class Navigator:
         # Unreachable: the loop only exits through a return above.
         return self._finish(
             "error", None, trail, pages_fetched, hops_used, None, sub_goal,
-            run_started=run_started,
+            run_started=run_started, nav_link_extract_s=nav_link_extract_s,
             final_reasoning="Navigation ended without a decision.",
         )
 
@@ -462,7 +469,7 @@ class Navigator:
             elapsed_ms=int((time.perf_counter() - started) * 1000),
         )
 
-    def _run_timing(self, run_started: float) -> dict[str, float]:
+    def _run_timing(self, run_started: float, nav_link_extract_s: float = 0.0) -> dict[str, float]:
         """Where the run's wall-clock went.
 
         Reported because "the run took three minutes" is not actionable on its
@@ -476,8 +483,13 @@ class Navigator:
             "page_rate_limit_wait_s": fetcher.get("rate_limit_wait_s", 0.0),
             "page_retry_wait_s": fetcher.get("retry_wait_s", 0.0),
             "robots_s": fetcher.get("robots_s", 0.0),
-            "llm_s": round(getattr(self._llm, "api_seconds", 0.0) or 0.0, 2),
-            "llm_retry_wait_s": round(getattr(self._llm, "retry_wait_s", 0.0) or 0.0, 2),
+            "pdf_text_s": fetcher.get("pdf_text_s", 0.0),
+            "html_parse_s": fetcher.get("html_parse_s", 0.0),
+            "link_extract_s": round(
+                fetcher.get("link_extract_s", 0.0) + nav_link_extract_s, 3
+            ),
+            "llm_s": round(getattr(self._llm, "api_seconds", 0.0) or 0.0, 3),
+            "llm_retry_wait_s": round(getattr(self._llm, "retry_wait_s", 0.0) or 0.0, 3),
             "llm_retries": getattr(self._llm, "retries", 0) or 0,
         }
 
@@ -494,11 +506,15 @@ class Navigator:
         cap_hit: Literal["hops", "pages"] | None = None,
         final_reasoning: str = "",
         run_started: float | None = None,
+        nav_link_extract_s: float = 0.0,
     ) -> NavigationResult:
         stats = {
             "fetcher": self._fetcher.stats,
             "llm_calls": getattr(self._llm, "calls", None),
-            "timing": self._run_timing(run_started if run_started is not None else time.perf_counter()),
+            "timing": self._run_timing(
+                run_started if run_started is not None else time.perf_counter(),
+                nav_link_extract_s,
+            ),
         }
         self._log.emit(
             "navigation_finished",
