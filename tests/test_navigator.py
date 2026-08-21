@@ -37,21 +37,38 @@ def has_live_fixtures() -> bool:
     return bool(live_manifest().get("pages"))
 
 
-def readable_pdf() -> tuple[str, bytes]:
-    """A saved PDF that actually yields text, with a URL to serve it at.
+def pdf_matching(predicate, description: str) -> tuple[str, bytes]:
+    """A saved PDF satisfying *predicate*, with a URL to serve it at.
 
-    Found by extraction rather than by name: the manifest's only PDF is the
-    image-only ATM guide, and which document happens to be readable is a
-    property of the snapshot, not something to hardcode.
+    Selected by the property the caller needs, not by name or by scan order.
+    Picking "the first readable PDF" was deterministic only by accident: adding
+    an Arabic secure-code document to fixtures/live/ put a readable but
+    irrelevant file ahead of the fee schedule alphabetically, and a test that
+    validated on the word "fee" started failing. Which documents a snapshot
+    happens to contain is not something a test should depend on.
     """
     from browsing.fetcher import pdf_to_text
 
-    for name, path in sorted(LIVE_PDFS.items()):
+    for name, path in sorted(LIVE_PDFS.items()):  # sorted: stable tie-breaking
         content = path.read_bytes()
         text, _ = pdf_to_text(content)
-        if text and len(text) > 1000:
+        if predicate(text or ""):
             return f"https://www.banquemisr.com/-/media/{name}", content
-    pytest.skip("no saved PDF with extractable text")
+    pytest.skip(f"no saved PDF {description}")
+
+
+def readable_pdf(containing: str) -> tuple[str, bytes]:
+    """A saved PDF whose text contains *containing* -- what the caller asserts on."""
+    needle = containing.lower()
+    return pdf_matching(
+        lambda text: len(text) > 1000 and needle in text.lower(),
+        f"with extractable text containing {containing!r}",
+    )
+
+
+def unreadable_pdf() -> tuple[str, bytes]:
+    """A saved PDF that yields no text at all -- a scanned document."""
+    return pdf_matching(lambda text: not text.strip(), "that is image-only")
 
 
 needs_live = pytest.mark.skipif(not has_live_fixtures(), reason="fixtures/live/ is empty")
@@ -427,7 +444,7 @@ class TestValidation:
         # Fee data lives in PDFs linked from category pages, so a PDF has to be
         # a legitimate destination, not merely a link type. Uses the real
         # 23k-character fee schedule from fixtures/live/.
-        url, content = readable_pdf()
+        url, content = readable_pdf(containing="fee")
         routes = {url: FakeResponse(url, content=content, content_type="application/pdf")}
         fetcher = Fetcher(session=FakeSession(routes), respect_robots=False,
                           delay_range=(0.0, 0.0), allow_playwright=False)
@@ -445,9 +462,10 @@ class TestValidation:
     def test_an_image_only_pdf_never_resolves(self):
         # The saved ATM guide is a scanned document: it fetches fine but yields
         # no text, so it must be treated as a dead end rather than an answer.
-        path = LIVE_PDFS["media-guide-to-activate-debit-and-pre-paid-cards-through-the-atm-ashx.pdf"]
-        url = "https://www.banquemisr.com/-/media/atm-guide.ashx"
-        routes = {url: FakeResponse(url, content=path.read_bytes(), content_type="application/pdf")}
+        # Chosen by the property under test rather than by filename, so a
+        # renamed or re-fetched fixture skips cleanly instead of KeyError-ing.
+        url, content = unreadable_pdf()
+        routes = {url: FakeResponse(url, content=content, content_type="application/pdf")}
         fetcher = Fetcher(session=FakeSession(routes), respect_robots=False,
                           delay_range=(0.0, 0.0), allow_playwright=False)
         result = Navigator(
