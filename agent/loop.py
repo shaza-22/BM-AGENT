@@ -59,6 +59,7 @@ from typing import Any, Callable, Iterable
 from agent import config
 from agent.acceptance import AcceptanceGate, GateDecision, gate_from_config
 from agent.answer import compose_answer
+from agent.extraction import Extraction, extract_facts
 from agent.planner import PlanDraft, plan_with_model
 from agent.llm import LLMClient, LLMError
 from agent.navigator import NavigationResult, Navigator
@@ -84,6 +85,8 @@ class SubGoalOutcome:
     source_url: str | None = None
     verdict: dict[str, Any] | None = None
     nav_status: str = ""
+    # Set when the model read the page after keyword extraction found nothing.
+    extraction: dict[str, Any] | None = None
     hops_used: int = 0
     pages_fetched: int = 0
     gate: GateDecision | None = None
@@ -99,6 +102,7 @@ class SubGoalOutcome:
             "hops_used": self.hops_used,
             "pages_fetched": self.pages_fetched,
             "gate": self.gate.to_dict() if self.gate else None,
+            "extraction": self.extraction,
         }
 
 
@@ -287,6 +291,7 @@ class ResearchLoop:
         max_expansion_depth: int = config.MAX_EXPANSION_DEPTH,
         compose: bool | None = None,
         planning: bool | None = None,
+        fallback: bool | None = None,
     ) -> None:
         self._llm = _CountingLLM(llm)
         self._fetcher = fetcher
@@ -299,6 +304,7 @@ class ResearchLoop:
         self._max_llm_calls = max_llm_calls
         self._max_expansion_depth = max_expansion_depth
         self._compose = config.COMPOSE_ANSWER if compose is None else compose
+        self._fallback = (config.LLM_EXTRACTION_FALLBACK if fallback is None else fallback)
         self._planning = config.LLM_PLANNING if planning is None else planning
 
         self._pages_used = 0
@@ -581,8 +587,106 @@ class ResearchLoop:
             result.error_reason = nav.final_reasoning or "the model could not be reached"
 
         outcome = self._outcome_from(sub_goal, nav, collected)
+        self._fallback_extract(sub_goal, nav, collected, outcome)
         self._emit("sub_goal_finished", **outcome.to_dict(), **self._budget())
         return outcome
+
+    # -- the extraction fallback ------------------------------------------
+    @staticmethod
+    def _needs_extraction(outcome: SubGoalOutcome) -> bool:
+        """Has the deterministic path actually failed on this sub-goal?
+
+        Two cases, both from real runs:
+
+        * it did not resolve -- ``unresolved``, ``partial`` or nothing found;
+        * it *did* resolve but extracted no field carrying a value. That is the
+          contradiction of a green tick above "No verified facts were
+          retrieved": the validator recognised a page full of product names and
+          no answer to the question.
+
+        Never fires speculatively. A resolve backed by real values is left
+        alone, because a second opinion there costs a call and can only agree.
+        """
+        if outcome.status in ("unresolved", "partial", "not_available"):
+            return True
+        if outcome.status != "resolved":
+            return False
+        extracted = (outcome.verdict or {}).get("extracted") or {}
+        has_values = any(
+            (table.get("records") or [])
+            for table in list(extracted.get("tables") or []) + list(extracted.get("pdf_tables") or [])
+        ) or bool(extracted.get("fields"))
+        return not has_values
+
+    def _best_page_for(self, nav: NavigationResult, collected: "_Verdicts") -> tuple[str, str]:
+        """The page most worth re-reading: where navigation stopped, else the last fetched."""
+        url = (nav.page or {}).get("url") or ""
+        if url and self._page_text.get(url):
+            return url, self._page_text[url]
+        for step in reversed(nav.trail):
+            if step.fetch_ok and self._page_text.get(step.url):
+                return step.url, self._page_text[step.url]
+        return "", ""
+
+    def _fallback_extract(
+        self, sub_goal: Any, nav: NavigationResult, collected: "_Verdicts",
+        outcome: SubGoalOutcome,
+    ) -> None:
+        """Read the best page with the model, once, if the keyword path failed."""
+        if not self._fallback or not self._needs_extraction(outcome):
+            return
+        if self._exhausted() is not None:
+            logger.info("extraction fallback skipped for %s: budget spent", sub_goal.id)
+            return
+
+        # A run that never got past the seed has nothing worth re-reading: the
+        # homepage answers no question, and reading it costs a call to find
+        # that out.
+        if nav.pages_fetched <= 1 and nav.status in ("no_candidates", "error", "blocked"):
+            logger.info("extraction fallback skipped for %s: never left the seed", sub_goal.id)
+            return
+
+        url, text = self._best_page_for(nav, collected)
+        if not text:
+            return
+
+        extraction = extract_facts(sub_goal.question, text, self._llm)
+        outcome.extraction = extraction.to_dict()
+        self._emit("extraction", sub_goal_id=sub_goal.id, url=url, **extraction.to_dict())
+        if not extraction.used:
+            return
+
+        # The facts become a verdict in the shape the rest of the pipeline
+        # already reads. Their coverage logic is deliberately bypassed: it is
+        # the thing that just failed, and re-asking it would only fail again.
+        verdict = dict(outcome.verdict or {})
+        extracted = dict(verdict.get("extracted") or {})
+        extracted["tables"] = list(extracted.get("tables") or []) + [
+            extraction.as_table(sub_goal.question)
+        ]
+        verdict.update(
+            resolved=True,
+            status="resolved",
+            extracted=extracted,
+            source_url=verdict.get("source_url") or url,
+            reason=(
+                f"read from the page text by the model: {extraction.reason} "
+                f"(keyword extraction found none)"
+            ),
+        )
+
+        decision = self._gate.judge(verdict, url, text)
+        if not decision.accepted:
+            self._gate_rejections += 1
+            logger.info("acceptance gate withheld an extraction-fallback resolve: %s",
+                        decision.reason)
+            return
+
+        outcome.verdict = verdict
+        outcome.status = "resolved"
+        outcome.reason = verdict["reason"]
+        outcome.source_url = verdict["source_url"]
+        outcome.gate = decision
 
     def _outcome_from(
         self, sub_goal: Any, nav: NavigationResult, collected: "_Verdicts"

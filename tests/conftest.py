@@ -174,6 +174,31 @@ def live_fetcher(**kwargs):
 
 PLANNING_MARKER = "Break this into the sub-goals needed to answer it"
 COMPOSING_MARKER = "Write the answer to the user's question"
+EXTRACTION_MARKER = "Pull out the facts on this page"
+
+
+def no_facts_reply() -> str:
+    """An extraction reply saying the page does not answer the question.
+
+    The honest default for a stub: the fallback fires only where the keyword
+    path failed, and "this page does not answer it" is often the true answer.
+    """
+    return json.dumps({"facts": [], "present": False, "note": "stubbed: no facts"})
+
+
+def copy_from_page(prompt: str, count: int = 2, plus_invented: bool = False) -> str:
+    """Extraction reply copying real lines out of the page in the prompt.
+
+    This is what a well-behaved model does -- values character for character
+    from the page it was shown -- so a test using it exercises the verbatim
+    check honestly rather than against text the run never fetched.
+    """
+    body = prompt.split("---", 1)[1].rsplit("---", 1)[0]
+    lines = [l.strip() for l in body.splitlines() if len(l.strip()) > 12][:count]
+    facts = [{"label": f"fact {i + 1}", "value": line} for i, line in enumerate(lines)]
+    if plus_invented:
+        facts.append({"label": "invented", "value": "EGP 99999 nowhere on this page"})
+    return json.dumps({"facts": facts, "present": True, "note": ""})
 
 
 def plan_reply(*questions: str, reasoning: str = "decomposed for the test") -> str:
@@ -215,6 +240,8 @@ def choose_by(*needles: str):
     def respond(prompt: str) -> str:
         if PLANNING_MARKER in prompt:
             return echo_plan(prompt)
+        if EXTRACTION_MARKER in prompt:
+            return no_facts_reply()
         needle = remaining.pop(0) if remaining else None
         if needle is None:
             return json.dumps({"choice": -1, "reasoning": "script exhausted", "confidence": 0.4})

@@ -310,3 +310,24 @@ LLM_PLANNING = True
 # then marked not-available with the reason and appear in the answer, so the
 # overrun is visible rather than silent.
 MAX_PLANNED_SUB_GOALS = 3
+
+
+# --- LLM extraction fallback -----------------------------------------------
+# The vendored extraction is keyword matching. When it yields nothing usable,
+# agent/extraction.py reads the page with the model instead -- one call per
+# sub-goal, at most, and only after the deterministic path has failed.
+#
+# The label the model writes is free (that is how "Fees and Rates" on a page
+# bridges to "fees and charges" in a question); the value must be a literal
+# substring of the page. See that module for why.
+#
+# Set False to revert to deterministic extraction only.
+LLM_EXTRACTION_FALLBACK = True
+
+# How much of a page to show the model. Long enough for a fee table, short
+# enough that a 140k-character PDF does not become the prompt.
+EXTRACTION_MAX_PAGE_CHARS = 12000
+
+# Facts to accept from one page. A page has many numbers on it; this is a
+# ceiling on the answer's size, not a target.
+EXTRACTION_MAX_FACTS = 25

@@ -35,6 +35,7 @@ def build(*needles: str, **kwargs) -> tuple[ResearchLoop, list]:
     events: list[tuple[str, dict]] = []
     kwargs.setdefault("compose", False)    # navigation under test, not wording
     kwargs.setdefault("planning", False)   # ...nor decomposition: see TestModelPlanning
+    kwargs.setdefault("fallback", False)   # ...nor re-reading: see TestExtractionFallback
     loop = ResearchLoop(
         FakeLLMClient(choose_by(*needles)),
         fetcher=live_fetcher(),
