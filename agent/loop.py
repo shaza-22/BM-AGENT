@@ -596,34 +596,54 @@ class ResearchLoop:
 
     # -- the extraction fallback ------------------------------------------
     @staticmethod
-    def _needs_extraction(outcome: SubGoalOutcome) -> bool:
-        """Has the deterministic path actually failed on this sub-goal?
-
-        Two cases, both from real runs:
-
-        * it did not resolve -- ``unresolved``, ``partial`` or nothing found;
-        * it *did* resolve but extracted no field carrying a value. That is the
-          contradiction of a green tick above "No verified facts were
-          retrieved": the validator recognised a page full of product names and
-          no answer to the question.
-
-        Never fires speculatively. A resolve backed by real values is left
-        alone, because a second opinion there costs a call and can only agree.
-        """
-        if outcome.status in ("unresolved", "partial", "not_available"):
-            return True
+    def _has_usable_facts(outcome: SubGoalOutcome) -> bool:
+        """Did this sub-goal end holding any field with a value in it?"""
         if outcome.status != "resolved":
             return False
         extracted = (outcome.verdict or {}).get("extracted") or {}
-        has_values = any(
-            (table.get("records") or [])
-            for table in list(extracted.get("tables") or []) + list(extracted.get("pdf_tables") or [])
-        ) or bool(extracted.get("fields"))
-        return not has_values
+        return bool(
+            any(
+                (table.get("records") or [])
+                for table in list(extracted.get("tables") or [])
+                + list(extracted.get("pdf_tables") or [])
+            )
+            or extracted.get("fields")
+        )
+
+    @classmethod
+    def _needs_extraction(cls, outcome: SubGoalOutcome) -> bool:
+        """Fire whenever the sub-goal produced no usable facts. Full stop.
+
+        This was a whitelist of terminal statuses, and it missed the one that
+        matters most in practice. ``arrived`` -- the navigator reached a page
+        and nothing validated it -- lands as ``not_available`` and was covered,
+        but ``unreadable`` was not, and any status added later would not have
+        been either. A whitelist of the ways to fail is a list that will be
+        incomplete again.
+
+        So the question is asked the other way round: are there facts? If not,
+        read the page. That covers every route to an empty answer, including
+        the contradiction of a green tick above "No verified facts were
+        retrieved" -- a resolve on product names with no field extracted.
+
+        Still never speculative: a resolve backed by real values returns False,
+        because a second opinion there costs a call and can only agree.
+        """
+        return not cls._has_usable_facts(outcome)
 
     def _best_page_for(self, nav: NavigationResult, collected: "_Verdicts") -> tuple[str, str]:
-        """The page most worth re-reading: where navigation stopped, else the last fetched."""
-        url = (nav.page or {}).get("url") or ""
+        """The page most worth re-reading: where navigation stopped, else the last fetched.
+
+        ``nav.page`` is consulted for its own text first rather than looking the
+        URL up in ``self._page_text``. That cache is filled by ``validate_fn``,
+        which the navigator skips for a page it could not fetch -- so relying on
+        it made the fallback depend on a side effect that does not always
+        happen, and when it did not the whole thing returned silently.
+        """
+        page = nav.page or {}
+        url, text = page.get("url") or "", page.get("text") or ""
+        if url and text:
+            return url, text
         if url and self._page_text.get(url):
             return url, self._page_text[url]
         for step in reversed(nav.trail):
@@ -636,7 +656,20 @@ class ResearchLoop:
         outcome: SubGoalOutcome,
     ) -> None:
         """Read the best page with the model, once, if the keyword path failed."""
-        if not self._fallback or not self._needs_extraction(outcome):
+        # Every exit from here says why, at INFO. A silent skip is how this
+        # went unnoticed for a whole run: the log showed navigation ending and
+        # the loop finishing 18ms later with nothing in between.
+        if not self._fallback:
+            return
+        if not self._needs_extraction(outcome):
+            logger.info(
+                "extraction fallback not needed for %s: the sub-goal already holds facts",
+                sub_goal.id,
+            )
+            return
+        if nav.status == "blocked":
+            logger.info("extraction fallback skipped for %s: the site blocked the run",
+                        sub_goal.id)
             return
         if self._exhausted() is not None:
             logger.info("extraction fallback skipped for %s: budget spent", sub_goal.id)
@@ -651,7 +684,17 @@ class ResearchLoop:
 
         url, text = self._best_page_for(nav, collected)
         if not text:
+            logger.info(
+                "extraction fallback skipped for %s: nothing to read (nav ended %s "
+                "with %d page(s) and no readable text)",
+                sub_goal.id, nav.status, nav.pages_fetched,
+            )
             return
+
+        logger.info(
+            "extraction fallback firing for %s (nav ended %s): re-reading %s (%d chars)",
+            sub_goal.id, nav.status, url, len(text),
+        )
 
         extraction = extract_facts(sub_goal.question, text, self._llm)
         outcome.extraction = extraction.to_dict()

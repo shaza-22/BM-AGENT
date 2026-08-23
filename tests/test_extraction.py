@@ -266,3 +266,159 @@ class TestTheFallbackInTheLoop:
             compose=False, planning=False, fallback=False)
         loop.run("How do I open an Islamic account?")
         assert calls["n"] == 0
+
+
+class TestItFiresOnEveryRouteToAnEmptyAnswer:
+    """Reported from a live run: nothing fired on ``arrived``.
+
+        selection hop=3 outcome=arrived
+        navigation arrived ... after 2 hops / 3 pages
+        loop finished: sub_goals=1 resolved=0 ... answer=template
+
+    18ms, no extraction line — on a page holding 23,710 characters of fee
+    text. ``arrived`` is the navigator reaching a page that nothing validated,
+    which is exactly what the fallback exists for and the most common way a run
+    ends with no answer.
+
+    The trigger was a whitelist of terminal statuses. A whitelist of the ways to
+    fail is a list that will be incomplete again, so the question is now asked
+    the other way round: are there facts? If not, read the page.
+    """
+
+    def _outcome(self, status: str, verdict=None):
+        from agent.loop import SubGoalOutcome
+
+        return SubGoalOutcome(sub_goal_id="sg_001", question="q",
+                              status=status, verdict=verdict)
+
+    @pytest.mark.parametrize("status", [
+        "not_available",   # what `arrived` becomes
+        "unresolved",
+        "partial",
+        "unreadable",      # was missed by the whitelist
+        "something_added_later",
+    ])
+    def test_any_status_without_facts_triggers_it(self, status: str):
+        assert ResearchLoop._needs_extraction(self._outcome(status)) is True
+
+    def test_a_resolve_carrying_no_field_triggers_it(self):
+        """The green tick above "No verified facts were retrieved"."""
+        verdict = {"extracted": {"entities": [{"name": "Credit Card"}], "tables": []}}
+        assert ResearchLoop._needs_extraction(self._outcome("resolved", verdict)) is True
+
+    def test_a_resolve_carrying_real_values_does_not(self):
+        """Never speculative: a second opinion there can only agree."""
+        verdict = {"extracted": {"tables": [{"records": [{"Issuance": "EGP 250"}]}]}}
+        assert ResearchLoop._needs_extraction(self._outcome("resolved", verdict)) is False
+
+    def test_it_fires_end_to_end_when_navigation_arrives(self):
+        """The reported case, driven through the whole loop."""
+        seen = {"extraction": 0}
+
+        nav = choose_by("/Pages/Cards", "Credit%20Cards%20List")
+        hops = {"n": 0}
+
+        def respond(prompt: str) -> str:
+            if PLANNING_MARKER in prompt:
+                from conftest import echo_plan
+                return echo_plan(prompt)
+            if EXTRACTION_MARKER in prompt:
+                seen["extraction"] += 1
+                return copy_from_page(prompt)
+            if "Write the answer" in prompt:
+                return "x"
+            hops["n"] += 1
+            if hops["n"] >= 3:      # the selector declares the route ends here
+                return json.dumps({"choice": -1, "outcome": "arrived",
+                                   "reasoning": "this page is the destination",
+                                   "confidence": 0.8})
+            return nav(prompt)
+
+        loop = ResearchLoop(FakeLLMClient(respond), fetcher=live_fetcher(),
+                            on_event=lambda n, d: None, compose=False,
+                            planning=False, fallback=True)
+        result = loop.run("What are the fees on the Classic credit card?")
+
+        assert result.outcomes[0].nav_status == "arrived"
+        assert seen["extraction"] == 1, "the fallback did not fire on arrived"
+        assert result.outcomes[0].extraction is not None
+
+    def test_the_page_text_comes_from_the_result_not_a_side_effect(self):
+        """``self._page_text`` is filled by validate_fn, which the navigator
+        skips for a page it could not fetch. Depending on it made the fallback
+        depend on a side effect that does not always happen -- and when it did
+        not, the whole thing returned silently."""
+        loop = ResearchLoop(FakeLLMClient(lambda p: "{}"), fetcher=live_fetcher(),
+                            on_event=lambda n, d: None)
+
+        class _Nav:
+            page = {"url": "https://www.banquemisr.com/x", "text": "Issuance EGP 250"}
+            trail: list = []
+
+        url, text = loop._best_page_for(_Nav(), None)
+        assert url.endswith("/x") and text == "Issuance EGP 250"
+
+
+class TestEverySkipSaysWhy:
+    """A silent skip is how this went unnoticed for a whole run."""
+
+    def _loop(self, **kwargs):
+        return ResearchLoop(FakeLLMClient(lambda p: "{}"), fetcher=live_fetcher(),
+                            on_event=lambda n, d: None, fallback=True, **kwargs)
+
+    def _nav(self, status="arrived", pages=3, page=None):
+        class _Nav:
+            pass
+
+        nav = _Nav()
+        nav.status, nav.pages_fetched, nav.trail = status, pages, []
+        nav.page = page
+        return nav
+
+    def _sub_goal(self):
+        class _SG:
+            id = "sg_001"
+            question = "q"
+        return _SG()
+
+    def test_nothing_to_read_is_logged(self, caplog):
+        from agent.loop import SubGoalOutcome
+
+        outcome = SubGoalOutcome(sub_goal_id="sg_001", question="q", status="not_available")
+        with caplog.at_level(logging.INFO, logger="agent.loop"):
+            self._loop()._fallback_extract(self._sub_goal(), self._nav(page=None), None, outcome)
+        assert "nothing to read" in caplog.text and "arrived" in caplog.text
+
+    def test_already_holding_facts_is_logged(self, caplog):
+        from agent.loop import SubGoalOutcome
+
+        outcome = SubGoalOutcome(
+            sub_goal_id="sg_001", question="q", status="resolved",
+            verdict={"extracted": {"tables": [{"records": [{"a": "b"}]}]}})
+        with caplog.at_level(logging.INFO, logger="agent.loop"):
+            self._loop()._fallback_extract(self._sub_goal(), self._nav(), None, outcome)
+        assert "already holds facts" in caplog.text
+
+    def test_a_blocked_run_is_logged_and_costs_nothing(self, caplog):
+        from agent.loop import SubGoalOutcome
+
+        outcome = SubGoalOutcome(sub_goal_id="sg_001", question="q", status="not_available")
+        with caplog.at_level(logging.INFO, logger="agent.loop"):
+            self._loop()._fallback_extract(
+                self._sub_goal(), self._nav(status="blocked"), None, outcome)
+        assert "blocked" in caplog.text
+
+    def test_firing_announces_the_page_and_its_size(self, caplog):
+        """So "it fired and found nothing" is distinguishable from "it never ran"."""
+        from agent.loop import SubGoalOutcome
+
+        outcome = SubGoalOutcome(sub_goal_id="sg_001", question="q", status="not_available")
+        loop = ResearchLoop(
+            FakeLLMClient(lambda p: json.dumps({"facts": [], "present": False, "note": ""})),
+            fetcher=live_fetcher(), on_event=lambda n, d: None, fallback=True)
+        nav = self._nav(page={"url": "https://www.banquemisr.com/fees.pdf",
+                              "text": "Issuance EGP 250 " * 100})
+        with caplog.at_level(logging.INFO, logger="agent.loop"):
+            loop._fallback_extract(self._sub_goal(), nav, None, outcome)
+        assert "firing for sg_001" in caplog.text
+        assert "fees.pdf" in caplog.text and "chars" in caplog.text

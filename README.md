@@ -903,7 +903,28 @@ The check is not a plain substring test. A page saying `EGP 2500` would pass a
 model's `250` as a substring — a figure wrong by a factor of ten, with a
 citation attached. Matches must end where a token ends.
 
-### Cost, and when it fires
+### When it fires
+
+**Whenever the sub-goal produced no usable facts, whatever ended it.** Not a
+whitelist of terminal statuses — that was the first version, and it missed the
+status that matters most in practice. `arrived` is the navigator reaching a
+page that nothing validated, which is exactly what the fallback exists for, and
+a live run went straight past a document holding 23,710 characters of fee text
+without a single call.
+
+A whitelist of the ways to fail is a list that will be incomplete again, so the
+question is asked the other way round: **are there facts? If not, read the
+page.** That covers `arrived`, `unreadable`, `exhausted`, and anything added
+later, plus the contradiction of a green tick above "no verified facts" — a
+resolve on product names with no field extracted.
+
+Every skip is logged at INFO with its reason. A silent skip is how the missing
+trigger went unnoticed for a whole run: the log showed navigation ending and
+the loop finishing 18ms later with nothing in between. There is now always a
+line, either `extraction fallback firing for sg_001 (nav ended arrived):
+re-reading <url> (23710 chars)` or one saying why not.
+
+### Cost
 
 One call per sub-goal at most, at the outcome boundary, on the best page that
 navigation saw. Not inside `validate_fn` — the navigator calls that for every
