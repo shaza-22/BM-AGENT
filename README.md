@@ -54,7 +54,7 @@ tests/               pytest suite, fully offline
 ```bash
 pip install -r requirements.txt
 cp .env.example .env                    # then paste your key into it
-pytest                                  # 499 tests, no network, no API key
+pytest                                  # 505 tests, no network, no API key
 python scripts/save_fixtures.py         # ONE-OFF, hits the live site
 ```
 
@@ -437,7 +437,18 @@ it would be brittle and the patterns would encode the site's vocabulary, which
 is the coupling this project avoids everywhere else.
 
 The resolved sub-goal is always surfaced ("Interpreting as: …"), which is the
-real guard: a wrong rewrite is visible rather than silent. A resolver that
+real guard: a wrong rewrite is visible rather than silent. The panel keys on
+the sub-goal having *changed*, not on the model's `used_context` self-report --
+a model can rewrite a follow-up correctly and still claim it used no context,
+and gating on the self-report hid the only visible evidence that conversation
+memory works. Every resolution is logged at INFO with its input, its output and
+both flags, so the terminal shows what happened without guessing:
+
+```
+session resolver: task='and what are the fees on those?'
+  -> sub_goal='what are the fees on Banque Misr credit cards'
+     used_context=False changed=True ('those' refers to the credit cards)
+``` A resolver that
 fails, returns nothing, or answers the question instead of rewriting it falls
 back to the raw request with a logged warning, and never blocks a run.
 

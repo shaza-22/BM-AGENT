@@ -11,6 +11,8 @@ import logging
 from agent import config
 from agent.llm import FakeLLMClient, LLMError
 from agent.navigator import NavigationResult, TrailStep
+import pytest
+
 from agent.session import (
     Resolution,
     Session,
@@ -228,3 +230,54 @@ class TestSessionStore:
         ids = [store.create().session_id for _ in range(5)]
         assert len(store) == 3
         assert store.get(ids[0]) is None
+
+
+class TestResolverVisibility:
+    """The resolution must be observable -- it is the evidence that
+    conversation context works, and it is what the UI shows the user."""
+
+    def setup_method(self):
+        self.session = Session()
+        self.session.add_turn("list the cards", Resolution("list the cards", False, "x"), result())
+
+    def test_the_first_turn_logs_that_it_passed_through(self, caplog):
+        with caplog.at_level(logging.INFO, logger="agent.session"):
+            resolve_task("find the cards", Session(), FakeLLMClient([]))
+        assert "passed through" in caplog.text
+
+    def test_a_rewrite_is_logged_with_input_and_output(self, caplog):
+        llm = FakeLLMClient([reply("find the fees for the credit cards")])
+        with caplog.at_level(logging.INFO, logger="agent.session"):
+            resolve_task("and the fees for those?", self.session, llm)
+        assert "and the fees for those?" in caplog.text
+        assert "find the fees for the credit cards" in caplog.text
+        assert "used_context=True" in caplog.text
+
+    def test_a_self_contained_answer_is_logged_too(self, caplog):
+        # The case that produced no log line at all before: the model decides
+        # the follow-up needs no context, the UI shows nothing, and there was
+        # no way to tell that from outside.
+        llm = FakeLLMClient([reply("where are the branches", used_context=False)])
+        with caplog.at_level(logging.INFO, logger="agent.session"):
+            resolve_task("where are the branches", self.session, llm)
+        assert "used_context=False" in caplog.text
+        assert "changed=False" in caplog.text
+
+    def test_a_rewrite_is_reported_even_when_the_model_denies_using_context(self, caplog):
+        # used_context is a self-report; the change in text is a fact.
+        llm = FakeLLMClient([reply("the fees on the credit cards", used_context=False)])
+        with caplog.at_level(logging.INFO, logger="agent.session"):
+            resolution = resolve_task("and the fees on those?", self.session, llm)
+        assert resolution.sub_goal == "the fees on the credit cards"
+        assert "changed=True" in caplog.text
+
+    @pytest.mark.parametrize(
+        "value,expected",
+        [(True, True), (False, False), ("true", True), ("false", False),
+         ("True", True), ("no", False), (None, False), (1, True), (0, False)],
+    )
+    def test_used_context_survives_a_string_boolean(self, value, expected):
+        # bool("false") is True, so a model answering with the word rather than
+        # the literal would have inverted the flag.
+        raw = json.dumps({"sub_goal": "x", "used_context": value, "reasoning": "y"})
+        assert parse_resolution(raw, "task").used_context is expected

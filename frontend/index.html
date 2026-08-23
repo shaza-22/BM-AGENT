@@ -142,11 +142,18 @@ function showReplayBadge(d) {
 
 function showResolved(d) {
   showReplayBadge(d);
-  if (!d.used_context || d.sub_goal === d.task) return;
+  // Keyed on the observable fact that the text changed, not only on the
+  // model's used_context self-report: a model can rewrite a follow-up
+  // correctly and still claim it used no context, and that would have hidden
+  // the one piece of visible evidence that conversation memory works.
+  const rewritten = d.sub_goal && d.sub_goal !== d.task;
+  if (!rewritten && !d.used_context) return;
   $("interpreting").hidden = false;
-  $("interpreting").innerHTML =
-    `<b>Interpreting as:</b> <span dir="auto">${esc(d.sub_goal)}</span>` +
-    `<div class="caveat" dir="auto">${esc(d.reasoning)}</div>`;
+  $("interpreting").innerHTML = rewritten
+    ? `<b>Interpreting as:</b> <span dir="auto">${esc(d.sub_goal)}</span>` +
+      `<div class="caveat" dir="auto">${esc(d.reasoning)}</div>`
+    : `<b>Read in the context of this conversation.</b>` +
+      `<div class="caveat" dir="auto">${esc(d.reasoning)}</div>`;
 }
 
 function addHop(d) {

@@ -294,9 +294,20 @@ def parse_resolution(raw: str, task: str) -> Resolution:
 
     return Resolution(
         sub_goal=sub_goal,
-        used_context=bool(parsed.get("used_context")),
+        used_context=_coerce_flag(parsed.get("used_context")),
         reasoning=str(parsed.get("reasoning") or "").strip() or "no explanation given",
     )
+
+
+def _coerce_flag(value: object) -> bool:
+    """Read a boolean the model may have sent as a string.
+
+    bool("false") is True, so a model that answers with the word rather than
+    the literal would have inverted the flag.
+    """
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "yes", "1")
+    return bool(value)
 
 
 def _fallback(task: str, why: str) -> Resolution:
@@ -317,6 +328,10 @@ def resolve_task(task: str, session: Session | None, llm: LLMClient) -> Resoluti
 
     if session is None or not session.turns:
         # Nothing to resolve against, and no reason to spend a model call.
+        logger.info(
+            "session resolver: task=%r -> passed through (no prior turns in this session)",
+            cleaned,
+        )
         return Resolution(
             sub_goal=cleaned,
             used_context=False,
@@ -330,8 +345,18 @@ def resolve_task(task: str, session: Session | None, llm: LLMClient) -> Resoluti
         return _fallback(cleaned, f"the resolver could not be reached ({exc})")
 
     resolution = parse_resolution(raw, cleaned)
-    if resolution.used_context and resolution.sub_goal != cleaned:
-        logger.info("resolved %r -> %r (%s)", cleaned, resolution.sub_goal, resolution.reasoning)
+    # Logged on every path, including the uninteresting ones. Gating this on
+    # used_context meant the one case worth debugging -- the model deciding a
+    # follow-up was self-contained, so the UI shows nothing -- was the only
+    # case that produced no log line at all.
+    logger.info(
+        "session resolver: task=%r -> sub_goal=%r used_context=%s changed=%s (%s)",
+        cleaned,
+        resolution.sub_goal,
+        resolution.used_context,
+        resolution.sub_goal != cleaned,
+        resolution.reasoning,
+    )
     return resolution
 
 

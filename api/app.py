@@ -78,6 +78,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.registry.shutdown()
 
 
+def configure_logging() -> None:
+    """Make the agent's own log lines visible when running under uvicorn.
+
+    uvicorn configures its loggers, not ours, so without this the step log,
+    the resolver's decisions and every escalation went nowhere -- which is
+    exactly the position of not being able to tell from outside what the agent
+    did. Only installs a handler when nothing else has, so a caller that has
+    already configured logging keeps its own setup. BM_LOG_LEVEL overrides.
+    """
+    level = os.environ.get("BM_LOG_LEVEL", "INFO").upper()
+    root = logging.getLogger()
+    if not root.handlers:
+        logging.basicConfig(
+            level=level, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+        )
+    for name in ("agent", "browsing", "api"):
+        logging.getLogger(name).setLevel(level)
+
+
 def _dir_from_env(name: str) -> pathlib.Path | None:
     value = os.environ.get(name, "").strip()
     return pathlib.Path(value) if value else None
@@ -92,6 +111,7 @@ def create_app(
     ``BM_RECORD_DIR`` saves each finished run, and ``BM_REPLAY_DIR`` serves
     saved runs instead of navigating. A replayed run says so in its events.
     """
+    configure_logging()
     app = FastAPI(title="Banque Misr research assistant", lifespan=lifespan)
     app.state.registry = registry or TaskRegistry(
         record_dir=_dir_from_env("BM_RECORD_DIR"),
