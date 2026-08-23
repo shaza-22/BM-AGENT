@@ -73,7 +73,17 @@ Rules:
 - Do not add background, history, advice, or anything not in the list above.
 - If the facts do not answer the question, say exactly which part is missing instead of filling it in.
 - Answer in {language_name}.
-- Be brief: a short paragraph, or a few lines of "label: value" where that reads better.
+
+Shape:
+- Open with one short line saying what follows.
+- Group related facts together under short bold headings, e.g. **Card fees**,
+  **Charges and penalties**, **Interest and installments**. Choose the groupings
+  from the facts themselves.
+- Put one fact per line as "Label — value".
+- Leave a blank line between groups.
+- Close with one short line saying where the figures came from.
+- Do not repeat a fact in more than one group, and keep the whole thing short
+  enough to read at a glance.
 """
 
 LANGUAGE_NAMES = {"en": "English", "ar": "Arabic"}

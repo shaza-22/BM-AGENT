@@ -53,11 +53,93 @@ logger = logging.getLogger(__name__)
 # A figure: 250, 10,000, 2.81%, 400000. Currency words travel with them in the
 # text and are matched as part of the surrounding value, not separately.
 _NUMBER = re.compile(r"\d[\d,.]*%?")
-# Sentence boundaries, keeping list items and newlines as their own units so a
-# struck bullet does not take its neighbours with it.
-_SENTENCE = re.compile(r"[^.!?\n]+[.!?]?|\n")
+# Sentence boundaries. A terminator only ends a sentence when whitespace or the
+# end of the line follows it -- otherwise "2.81%" splits into "2." and "81%",
+# and the fragments then fail the figure check for numbers the model never
+# wrote. Same reason "P.O.S" must survive intact.
+_SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+")
+
+
+def _split_sentences(text: str) -> list[str]:
+    """Sentences, with each line its own unit.
+
+    Lines are kept separate so a struck bullet or heading does not take its
+    neighbours with it, and so markdown structure survives the round trip.
+    """
+    out: list[str] = []
+    for line in (text or "").splitlines():
+        if not line.strip():
+            out.append("")          # preserve blank lines for paragraphing
+            continue
+        out.extend(part for part in _SENTENCE_BREAK.split(line.strip()) if part.strip())
+    return out
 
 MIN_ANCHOR_CHARS = 4
+
+# A label made only of digits ("3", from a Tenor column) is not a label a
+# sentence can be said to "name" -- every figure in the answer matches it, and
+# the pair rule then strikes correct sentences for not quoting its value.
+_NUMERIC_LABEL = re.compile(r"^[\d\s.,%-]+$")
+
+# --- Scaffolding -----------------------------------------------------------
+# The rule "every sentence must carry a grounded label or value" is right for
+# assertions and wrong for the sentences that hold an answer together. It
+# struck every opening line, grouping line and closing note, because none of
+# them contains a figure -- so what survived was the bare fact sentences, and
+# the answer read as a list. Measured on a live run: 7 of 20 sentences removed,
+# every one of them for "carries no label or value".
+#
+# The distinction is not "does this contain a digit" but "does this assert
+# something about the bank". So scaffolding is recognised *positively*, by
+# structure, and everything else keeps the old rule. An allow-list fails safe:
+# a sentence that is not recognisably scaffolding is still an assertion and
+# still has to be grounded.
+#
+# "There is no annual fee." is the case that must keep failing. It asserts a
+# fact, carries no figure, and is exactly what a model reaches for when the
+# evidence does not cover something -- so negation disqualifies a sentence from
+# scaffolding regardless of anything else.
+
+# Words that turn a sentence into a claim about what is or is not the case.
+_NEGATION = re.compile(
+    r"\b(no|not|none|never|without|free|excluded|included|unlimited|any|"
+    r"isn'?t|aren'?t|doesn'?t|don'?t|won'?t|cannot|can'?t)\b"
+)
+
+# Talking about the answer or its sources rather than about the bank.
+_META = re.compile(
+    r"\b(here (are|is)|below|above|as follows|the following|these (figures|are|fees|rates)|"
+    r"this (answer|information|is based)|according to|taken from|sourced from|"
+    r"from the (page|source|card'?s|bank'?s)|listed|shown|see the source|"
+    r"summar(y|ised|ized)|breakdown|in summary|note that|all figures|"
+    r"the figures (above|below)|source[sd]?)\b"
+)
+
+# A heading or lead-in: ends with a colon, or is a short markdown heading or
+# bullet header. These introduce facts, they do not assert them.
+_LEAD_IN = re.compile(r":\s*$")
+_MARKDOWN_HEADING = re.compile(r"^\s*(#{1,6}\s+|\*\*[^*]+\*\*\s*:?\s*$|[-*]\s*\*\*)")
+
+
+def is_scaffolding(sentence: str) -> bool:
+    """Does this sentence hold the answer together without asserting a fact?
+
+    True only for structure: a lead-in ending in a colon, a markdown heading,
+    or a sentence that talks about the answer and its sources. Never true for
+    a sentence containing a figure, and never true for one containing a
+    negation or an absolute -- those assert something and must be grounded.
+    """
+    stripped = sentence.strip()
+    if not stripped:
+        return True
+    if _NUMBER.search(stripped):
+        return False          # any figure makes it an assertion, checked above
+    low = _norm(stripped)
+    if _NEGATION.search(low):
+        return False          # "there is no annual fee" is a claim, not framing
+    if _MARKDOWN_HEADING.match(stripped) or _LEAD_IN.search(stripped):
+        return True
+    return bool(_META.search(low))
 
 
 def _norm(text: str) -> str:
@@ -103,7 +185,10 @@ def _claim_parts(claims: Iterable[dict]) -> tuple[set[str], list[str], list[tupl
     for claim in claims:
         value = str(claim.get("value") or "")
         label = str(claim.get("entity") or claim.get("field") or "")
-        for source in (value, str(claim.get("statement") or "")):
+        # The label counts as evidence too: a Tenor row is labelled "3", so a
+        # sentence quoting "3 — 2.81%" is quoting the row, not inventing a
+        # figure. Scanning only values made every such row unquotable.
+        for source in (value, label, str(claim.get("statement") or "")):
             for match in _NUMBER.findall(source):
                 figures.add(_norm_number(match))
         for candidate in (value, label):
@@ -130,9 +215,10 @@ def check_grounding(text: str, claims: list[dict]) -> GroundingReport:
     kept: list[str] = []
     struck: list[tuple[str, str]] = []
 
-    for raw in _SENTENCE.findall(text):
+    for raw in _split_sentences(text):
         sentence = raw.strip()
         if not sentence:
+            kept.append("")          # a blank line is layout, not a claim
             continue
         low = _norm(sentence)
 
@@ -145,7 +231,13 @@ def check_grounding(text: str, claims: list[dict]) -> GroundingReport:
             continue
 
         if not any(anchor in low for anchor in anchors):
-            struck.append((sentence, "carries no label or value from the evidence"))
+            # No grounded token. Either it is structure holding the answer
+            # together, which is allowed, or it is an unsupported assertion,
+            # which is not. See is_scaffolding for where that line is drawn.
+            if is_scaffolding(sentence):
+                kept.append(sentence)
+                continue
+            struck.append((sentence, "asserts something the evidence does not support"))
             continue
 
         # If the sentence names a label, the value it puts next to that label
@@ -158,7 +250,10 @@ def check_grounding(text: str, claims: list[dict]) -> GroundingReport:
         # quote the shorter label's value. The longest label present is the one
         # the sentence is actually about.
         if any(_norm_number(token) in figures for token in _NUMBER.findall(sentence)):
-            present = [(label, value) for label, value in pairs if label and label in low]
+            present = [
+                (label, value) for label, value in pairs
+                if label and label in low and not _NUMERIC_LABEL.match(label)
+            ]
             maximal = [
                 (label, value) for label, value in present
                 if not any(label != other and label in other for other, _v in present)
@@ -175,7 +270,12 @@ def check_grounding(text: str, claims: list[dict]) -> GroundingReport:
 
         kept.append(sentence)
 
-    report = GroundingReport(text=" ".join(kept).strip(), kept=kept, struck=struck)
+    # Rejoin on newlines so headings and grouped lists keep their shape; the
+    # answer is rendered as markdown, and " ".join would flatten it into the
+    # run-on paragraph this whole step exists to avoid.
+    rendered = "\n".join(kept)
+    rendered = re.sub(r"\n{3,}", "\n\n", rendered).strip()
+    report = GroundingReport(text=rendered, kept=[k for k in kept if k], struck=struck)
     if struck:
         logger.info(
             "grounding struck %d/%d generated sentence(s): %s",

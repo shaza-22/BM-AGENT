@@ -50,9 +50,68 @@ class TestGrounding:
         assert "not in the evidence" in report.struck[0][1]
 
     def test_a_bare_assertion_with_no_checkable_token_is_struck(self):
+        """The case scaffolding must never be allowed to cover.
+
+        It carries no figure, so nothing can be checked against the evidence --
+        and it is exactly what a model reaches for when the evidence does not
+        cover something. Negation disqualifies a sentence from scaffolding
+        regardless of anything else about it.
+        """
         report = check_grounding("The Classic card has no annual fee.", CLAIMS)
         assert report.text == ""
-        assert "no label or value" in report.struck[0][1]
+        assert "asserts something the evidence does not support" in report.struck[0][1]
+
+    @pytest.mark.parametrize("sentence", [
+        "There is no annual fee.",
+        "The card is free for the first year.",
+        "Cash withdrawals are unlimited.",
+        "Banque Misr is Egypt's second largest bank.",
+        "This card is not available to students.",
+    ])
+    def test_assertions_without_figures_are_still_struck(self, sentence: str):
+        assert check_grounding(sentence, CLAIMS).text == ""
+
+    @pytest.mark.parametrize("sentence", [
+        "Here are the fees for the Classic credit card:",
+        "**Card fees**",
+        "## Interest and installments",
+        "These figures are taken from the card's fee schedule.",
+        "In summary:",
+    ])
+    def test_scaffolding_survives(self, sentence: str):
+        """The rule used to strike every one of these for carrying no figure.
+
+        What survived was only the bare fact sentences, so the answer read as a
+        flat list. Measured on a realistic 17-sentence answer: 8 kept before,
+        14 after, with the same assertions struck in both.
+        """
+        assert check_grounding(sentence, CLAIMS).text == sentence
+
+    def test_grouped_structure_survives_the_round_trip(self):
+        answer = (
+            "Here are the fees:\n\n"
+            "**Card fees**\n"
+            "Issuance — EGP 250.\n"
+            "Renewal — EGP 250.\n\n"
+            "**Penalties**\n"
+            "Penalty for delay — EGP75.\n"
+        )
+        report = check_grounding(answer, CLAIMS)
+        assert report.struck == []
+        assert "**Card fees**" in report.text
+        assert report.text.count("\n\n") >= 2, "blank lines between groups were lost"
+
+    def test_a_decimal_point_is_not_a_sentence_boundary(self):
+        """"2.81%" split into "2." and "81%", and both then failed the figure
+        check for numbers the model never wrote."""
+        claims = [{"entity": "3", "value": "2.81%"}]
+        report = check_grounding("3 — 2.81%.", claims)
+        assert report.struck == [], report.struck
+
+    def test_a_numeric_label_does_not_trigger_the_pair_rule(self):
+        """A Tenor row is labelled "3"; every figure matches it."""
+        claims = [{"entity": "3", "value": "2.81%"}, {"entity": "6", "value": "2.77%"}]
+        assert check_grounding("6 — 2.77%.", claims).struck == []
 
     def test_off_evidence_prose_is_struck(self):
         report = check_grounding("Banque Misr is Egypt's second largest bank.", CLAIMS)

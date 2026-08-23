@@ -103,6 +103,24 @@
   .bar.warn > i { background:var(--warn); }
   .bar.bad  > i { background:var(--bad); }
   ul.gaps { margin:8px 0 0; padding-left:20px; font-size:13px; color:var(--muted); }
+
+  /* --- answer body (rendered markdown) --------------------------------- */
+  .answer p  { margin:0 0 8px; }
+  .answer h4 { margin:14px 0 5px; font-size:13px; text-transform:uppercase;
+               letter-spacing:.05em; color:var(--muted); font-weight:600; }
+  .answer h4:first-child { margin-top:0; }
+  .answer ul { margin:0 0 8px; padding-left:20px; }
+  .answer li { margin:2px 0; }
+  .answer > *:last-child { margin-bottom:0; }
+
+  /* --- what grounding removed ------------------------------------------ */
+  details.struck { margin-top:8px; font-size:12.5px; }
+  details.struck > summary { cursor:pointer; color:var(--muted); }
+  details.struck > summary:hover { color:var(--ink); }
+  details.struck ul { margin:8px 0 0; padding-left:18px; }
+  details.struck li { margin:6px 0; }
+  .struck-text { display:block; text-decoration:line-through; opacity:.75; }
+  .struck-why  { display:block; color:var(--muted); font-size:12px; }
 </style>
 </head>
 <body>
@@ -145,6 +163,40 @@ let seenHops = {}, planState = { order: [], byId: {} }, currentSubGoal = null;
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
+
+// A deliberately tiny markdown renderer: bold, headings, bullets, paragraphs.
+// The composer is asked for grouped output with short bold headings, and this
+// is what makes that structure visible instead of a run-on paragraph.
+// Everything is escaped first, so only the patterns below can produce markup —
+// model output is never inserted as HTML.
+function md(text) {
+  const blocks = esc(text || "").split(/\n{2,}/);
+  return blocks.map((block) => {
+    const lines = block.split("\n").filter((l) => l.trim());
+    if (!lines.length) return "";
+    const out = [];
+    let list = [];
+    const flush = () => {
+      if (list.length) { out.push(`<ul>${list.join("")}</ul>`); list = []; }
+    };
+    for (const line of lines) {
+      const heading = line.match(/^\s*(#{1,6})\s+(.*)$/);
+      const bold = line.match(/^\s*\*\*(.+?)\*\*\s*:?\s*$/);
+      const bullet = line.match(/^\s*[-*]\s+(.*)$/);
+      if (heading)      { flush(); out.push(`<h4>${inline(heading[2])}</h4>`); }
+      else if (bold)    { flush(); out.push(`<h4>${inline(bold[1])}</h4>`); }
+      else if (bullet)  { list.push(`<li>${inline(bullet[1])}</li>`); }
+      else              { flush(); out.push(`<p>${inline(line)}</p>`); }
+    }
+    flush();
+    return out.join("");
+  }).join("");
+}
+
+function inline(s) {
+  return s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+          .replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, "<em>$1</em>");
+}
 
 // Every terminal status gets its own voice. "arrived" is deliberately not
 // styled or worded as success: nothing has verified the page's content, and
@@ -395,14 +447,23 @@ function showAnswer(d) {
   // Saying which is the difference between "verified" meaning two things.
   let provenance = "";
   if (composed && g) {
+    // The reasons used to be dumped inline, repeated verbatim, one per struck
+    // sentence — unreadable, and it buried the answer. The count is the
+    // headline; the detail is one click away for anyone who wants it.
+    let detail = "";
+    if (g.sentences_struck) {
+      const rows = (g.struck || []).map((s) =>
+        `<li><span class="struck-text" dir="auto">${esc(s.sentence)}</span>` +
+        `<span class="struck-why">${esc(s.reason.replace(/\.$/, ""))}</span></li>`).join("");
+      detail =
+        `<details class="struck"><summary>${g.sentences_struck} of ${g.sentences_total} ` +
+        `sentence${g.sentences_total === 1 ? "" : "s"} removed — show what was cut</summary>` +
+        `<ul>${rows}</ul></details>`;
+    }
     provenance =
-      `<div class="caveat"><b>Written by the model</b> from ${d.composition.claims_offered} ` +
-      `verified facts. Every figure was checked against them` +
-      (g.sentences_struck
-        ? `; ${g.sentences_struck} of ${g.sentences_total} sentence(s) were removed for ` +
-          `saying something the evidence does not: ` +
-          esc(g.struck.map((s) => s.reason.replace(/\.$/, "")).join("; "))
-        : ` and all ${g.sentences_total} sentence(s) passed`) + `.</div>`;
+      `<div class="caveat"><b>Written by the model</b> from ` +
+      `${d.composition.claims_offered} verified facts; every figure checked against them` +
+      (g.sentences_struck ? "." : `, all ${g.sentences_total} kept.`) + `</div>` + detail;
   } else if (d.composition && d.composition.attempted && !d.composition.used) {
     provenance = `<div class="caveat"><b>Showing the extracted values.</b> ` +
       `A written answer was attempted and discarded: ${esc(d.composition.reason)}.</div>`;
@@ -414,7 +475,7 @@ function showAnswer(d) {
   $("final").innerHTML =
     `<div class="panel verdict ${d.resolved_count ? "v-ok" : "v-none"}">` +
       `<h2>${d.resolved_count ? "Answer" : "No answer found"}</h2>` +
-      `<div class="answer" dir="auto">${esc(d.answer || "")}</div>` +
+      `<div class="answer" dir="auto">${md(d.answer || "")}</div>` +
       support + provenance +
       (d.budget_exhausted ? `<div class="caveat">Stopped early: ${esc(d.budget_exhausted)}. ` +
         `Sub-goals left unvisited are listed below.</div>` : "") +
