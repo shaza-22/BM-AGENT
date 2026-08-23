@@ -66,6 +66,43 @@
   .status { color:var(--muted); font-size:13px; }
   h3 { font-size:13px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted);
        margin:0 0 10px; font-weight:600; }
+
+  /* --- plan ------------------------------------------------------------ */
+  .sg { display:flex; gap:9px; align-items:baseline; padding:6px 0; font-size:14px;
+        border-top:1px solid var(--line); }
+  .sg:first-child { border-top:0; }
+  .sg .dot { width:15px; flex:none; text-align:center; font-size:12px; }
+  .sg .q { flex:1; text-align:start; }
+  .sg .why2 { color:var(--muted); font-size:12.5px; margin-top:2px; }
+  .sg.pending .q  { color:var(--muted); }
+  .sg.running .q  { font-weight:600; }
+  .sg.resolved .dot { color:var(--ok); }
+  .sg.partial  .dot { color:var(--warn); }
+  .sg.not_available .dot, .sg.unresolved .dot { color:var(--muted); }
+  .budget { margin-top:10px; font-size:12.5px; color:var(--muted);
+            font-variant-numeric:tabular-nums; }
+  .expanded { font-size:12.5px; color:var(--muted); padding:6px 0 0 24px; }
+
+  /* --- hops grouped by sub-goal ---------------------------------------- */
+  .sgroup { border-top:1px solid var(--line); padding-top:10px; margin-top:10px; }
+  .sgroup:first-child { border-top:0; margin-top:0; padding-top:0; }
+  .sgroup > .head { font-size:12.5px; color:var(--muted); margin-bottom:2px; text-align:start; }
+
+  /* --- gate ------------------------------------------------------------- */
+  .gate { margin:8px 0 0 46px; padding:8px 10px; font-size:12.5px;
+          background:var(--warn-bg); border-left:3px solid var(--warn);
+          border-radius:0 6px 6px 0; }
+
+  /* --- answer ----------------------------------------------------------- */
+  .answer { white-space:pre-wrap; font-size:14.5px; text-align:start; }
+  .support { display:flex; align-items:center; gap:9px; margin-top:12px;
+             font-size:12.5px; color:var(--muted); font-variant-numeric:tabular-nums; }
+  .bar { flex:1; max-width:190px; height:6px; border-radius:4px; background:var(--line);
+         overflow:hidden; direction:ltr; }
+  .bar > i { display:block; height:100%; background:var(--ok); }
+  .bar.warn > i { background:var(--warn); }
+  .bar.bad  > i { background:var(--bad); }
+  ul.gaps { margin:8px 0 0; padding-left:20px; font-size:13px; color:var(--muted); }
 </style>
 </head>
 <body>
@@ -83,6 +120,12 @@
     <div id="status" class="status" hidden></div>
   </div>
 
+  <div class="panel" id="planPanel" hidden>
+    <h3>Plan</h3>
+    <div id="plan"></div>
+    <div id="budget" class="budget"></div>
+  </div>
+
   <div class="panel" id="hopsPanel" hidden>
     <h3>Navigation</h3>
     <div id="hops"></div>
@@ -94,7 +137,11 @@
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
-let sessionId = null, es = null, pollTimer = null, seenHops = 0;
+let sessionId = null, es = null, pollTimer = null;
+// Hops are numbered per sub-goal now (each walks live from the seed), so the
+// poll fallback's de-duplication has to be keyed by sub-goal too -- a single
+// counter would swallow every sub-goal's hop 0 after the first.
+let seenHops = {}, planState = { order: [], byId: {} }, currentSubGoal = null;
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
@@ -125,8 +172,10 @@ function setBusy(busy, note) {
 
 function reset() {
   $("hops").innerHTML = ""; $("hopsPanel").hidden = true;
+  $("plan").innerHTML = ""; $("planPanel").hidden = true; $("budget").textContent = "";
   $("final").innerHTML = ""; $("interpreting").hidden = true;
-  seenHops = 0;
+  seenHops = {}; planState = { order: [], byId: {} }; currentSubGoal = null;
+  gateShown.clear(); pendingGates = {};
   if (es) { es.close(); es = null; }
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
 }
@@ -156,14 +205,148 @@ function showResolved(d) {
       `<div class="caveat" dir="auto">${esc(d.reasoning)}</div>`;
 }
 
+// --- plan -----------------------------------------------------------------
+const SG_MARK = {
+  pending:"·", running:"▸", resolved:"✓", partial:"~",
+  not_available:"✕", unresolved:"✕", unreadable:"✕",
+};
+const SG_WORD = {
+  pending:"queued", running:"navigating…", resolved:"answered",
+  partial:"partly answered", not_available:"not found",
+  unresolved:"not found", unreadable:"document unreadable",
+};
+
+function renderPlan() {
+  if (!planState.order.length) return;
+  $("planPanel").hidden = false;
+  $("plan").innerHTML = planState.order.map((id) => {
+    const sg = planState.byId[id];
+    const state = sg.status || "pending";
+    return `<div class="sg ${esc(state)}">` +
+      `<span class="dot">${SG_MARK[state] || "·"}</span>` +
+      `<span class="q"><span dir="auto">${esc(sg.question)}</span>` +
+      `<div class="why2" dir="auto">${esc(sg.reason || SG_WORD[state] || "")}</div></span>` +
+    `</div>`;
+  }).join("");
+}
+
+function showPlan(d) {
+  planState = { order: [], byId: {} };
+  (d.sub_goals || []).forEach((sg) => {
+    planState.order.push(sg.id);
+    planState.byId[sg.id] = { question: sg.question, status: sg.status || "pending", reason: "" };
+  });
+  renderPlan();
+  showBudget(d);
+}
+
+function showBudget(d) {
+  if (d.pages_max === undefined || d.pages_max === null) return;
+  $("budget").textContent =
+    `budget · ${d.pages_used}/${d.pages_max} pages · ` +
+    `${d.llm_calls_used}/${d.llm_calls_max} model calls`;
+}
+
+function subGoalStarted(d) {
+  currentSubGoal = d.sub_goal_id;
+  if (!planState.byId[d.sub_goal_id]) {
+    planState.order.push(d.sub_goal_id);
+    planState.byId[d.sub_goal_id] = { question: d.question, status: "pending", reason: "" };
+  }
+  planState.byId[d.sub_goal_id].status = "running";
+  planState.byId[d.sub_goal_id].reason = "";
+  renderPlan();
+}
+
+function subGoalFinished(d) {
+  const sg = planState.byId[d.sub_goal_id] ||
+    (planState.order.push(d.sub_goal_id), planState.byId[d.sub_goal_id] = { question: d.question });
+  sg.question = d.question;
+  sg.status = d.status;
+  sg.reason = d.reason;
+  renderPlan();
+  showBudget(d);
+}
+
+function planExpanded(d) {
+  (d.added || []).forEach((sg) => {
+    if (planState.byId[sg.id]) return;
+    planState.order.push(sg.id);
+    planState.byId[sg.id] = { question: sg.question, status: "pending", reason: "added from what was found" };
+  });
+  renderPlan();
+  const note = document.createElement("div");
+  note.className = "expanded";
+  note.textContent = `plan expanded: +${(d.added || []).length} sub-goal(s) from what the page listed`;
+  $("hops").appendChild(note);
+}
+
+// --- gate -----------------------------------------------------------------
+// Rendered rather than only logged: the validator said stop and the run kept
+// going, which is a decision the screen has to own up to.
+const gateShown = new Set();
+let pendingGates = {};
+function showGate(d) {
+  if (d.accepted) return;
+  const key = `${d.sub_goal_id}|${d.url}`;   // the poll fallback resends
+  if (gateShown.has(key)) return;
+  gateShown.add(key);
+  $("hopsPanel").hidden = false;
+  const el = document.createElement("div");
+  el.className = "gate";
+  el.innerHTML =
+    `<b>Kept looking.</b> The validator accepted this page, but its evidence ` +
+    `also appears on ${d.pages_compared} other page(s) fetched in this run, so it is ` +
+    `site navigation rather than an answer.` +
+    `<div class="caveat" dir="auto">validator said: ${esc(d.validator_reason)}</div>`;
+
+  // Anchored to the hop it is about. The gate runs during validation, which
+  // happens before the step is logged, so on a live stream the notice arrives
+  // *before* the hop it belongs to and there is nothing to attach it to yet.
+  // Held until addHop renders that page; appending to the end instead would
+  // stack every notice under whichever hop rendered last, reading as though
+  // one page had been rejected twice.
+  const hop = $("hops").querySelector(`.hop[data-url="${CSS.escape(d.url)}"]`);
+  if (hop) hop.insertAdjacentElement("afterend", el);
+  else (pendingGates[d.url] ||= []).push(el);
+}
+
+function flushGates(url) {
+  const waiting = pendingGates[url];
+  if (!waiting) return;
+  delete pendingGates[url];
+  const hop = $("hops").querySelector(`.hop[data-url="${CSS.escape(url)}"]`);
+  waiting.forEach((el) => (hop ? hop.insertAdjacentElement("afterend", el)
+                               : $("hops").appendChild(el)));
+}
+
+// --- hops -----------------------------------------------------------------
+function hopGroup(d) {
+  const key = d.sub_goal_id || "_";
+  const id = "sgroup-" + key;
+  let group = document.getElementById(id);
+  if (!group) {
+    group = document.createElement("div");
+    group.className = "sgroup";
+    group.id = id;
+    if (planState.order.length > 1) {
+      group.innerHTML = `<div class="head" dir="auto">for: ${esc(d.sub_goal || "")}</div>`;
+    }
+    $("hops").appendChild(group);
+  }
+  return group;
+}
+
 function addHop(d) {
-  if (d.hop < seenHops) return;              // poll fallback may resend
-  seenHops = d.hop + 1;
+  const key = d.sub_goal_id || "_";
+  if (d.hop < (seenHops[key] || 0)) return;   // poll fallback may resend
+  seenHops[key] = d.hop + 1;
   $("hopsPanel").hidden = false;
   const badge = d.source ? `<span class="badge ${esc(d.source)}">${esc(d.source)}</span>` : "";
   const label = d.hop === 0 ? "Starting page" : esc(d.label || "(unlabelled link)");
   const el = document.createElement("div");
   el.className = "hop";
+  el.dataset.url = d.url;                    // so a gate notice can find its page
   el.innerHTML =
     `<div class="hopline"><span class="num">hop ${d.hop}</span>` +
     `<span class="label" dir="auto">${label}</span>${badge}</div>` +
@@ -171,10 +354,56 @@ function addHop(d) {
     `<div class="meta">${esc(d.url)} · ${d.status} · ${d.links_found} links` +
     (d.hop > 0 ? ` · ${d.candidates_offered}/${d.candidates_available} candidates` +
                  ` · confidence ${Number(d.confidence).toFixed(2)}` : "") + `</div>`;
-  $("hops").appendChild(el);
+  hopGroup(d).appendChild(el);
+  flushGates(d.url);
+}
+
+// --- the answer -----------------------------------------------------------
+function showAnswer(d) {
+  const gaps = (d.not_found || []).map((g) => `<li dir="auto">${esc(g)}</li>`).join("");
+  const sources = (d.source_urls || []).map(
+    (u) => `<li><a href="${esc(u)}" target="_blank" rel="noopener">${esc(u)}</a></li>`).join("");
+
+  // support_rate is 1.0 when nothing was claimed, which would read as "fully
+  // supported". With no claims there is nothing to be supported, so the bar is
+  // replaced by a plain statement rather than a reassuring green line.
+  let support;
+  if (!d.claims_total) {
+    support = `<div class="support">No verifiable claims were extracted, ` +
+              `so there is nothing to attribute.</div>`;
+  } else {
+    const pct = Math.round((d.support_rate || 0) * 100);
+    const cls = pct === 100 ? "" : (pct >= 50 ? "warn" : "bad");
+    support =
+      `<div class="support"><span>Verified against pages this run fetched:</span>` +
+      `<span class="bar ${cls}"><i style="width:${pct}%"></i></span>` +
+      `<span>${d.claims_supported}/${d.claims_total} claims (${pct}%)</span></div>` +
+      (pct < 100 ? `<div class="caveat">Unsupported statements were removed from the ` +
+                   `answer above rather than shown with sources beneath them.</div>` : "");
+  }
+
+  $("final").innerHTML =
+    `<div class="panel verdict ${d.resolved_count ? "v-ok" : "v-none"}">` +
+      `<h2>${d.resolved_count ? "Answer" : "No answer found"}</h2>` +
+      `<div class="answer" dir="auto">${esc(d.answer || "")}</div>` +
+      support +
+      (d.budget_exhausted ? `<div class="caveat">Stopped early: ${esc(d.budget_exhausted)}. ` +
+        `Sub-goals left unvisited are listed below.</div>` : "") +
+      (d.gate_rejections ? `<div class="caveat">${d.gate_rejections} page(s) were accepted by the ` +
+        `validator and rejected here as site navigation.</div>` : "") +
+      `<div class="timing">${d.resolved_count}/${d.sub_goals_total} sub-goals answered</div>` +
+    `</div>` +
+    (gaps ? `<div class="panel"><h3>Not found</h3><ul class="gaps">${gaps}</ul></div>` : "") +
+    (sources ? `<div class="panel"><h3>Sources cited</h3><ul class="sources">${sources}</ul></div>` : "");
+  setBusy(false, "");
 }
 
 function showDone(d) {
+  // The loop's answer is the result whenever there is one; the older
+  // page-reached verdict is kept for a bare navigation with no plan behind it
+  // (replayed recordings from before the intelligence layer landed, and the
+  // navigator-only tests).
+  if (d.answer) { showAnswer(d.answer); return; }
   const v = VERDICTS[d.status] || VERDICTS.error;
   const t = d.timing || {};
   const secs = (k) => Number(t[k] || 0).toFixed(1);
@@ -225,6 +454,9 @@ function startPolling(taskId) {
     }
     const s = await r.json();
     if (s.sub_goal) showResolved({ ...s, task: s.task });
+    if (s.plan) showPlan(s.plan);
+    (s.sub_goals || []).forEach(subGoalFinished);
+    (s.gate_events || []).forEach(showGate);
     (s.hops || []).forEach(addHop);
     if (s.state === "done" && s.result) { finish(); showDone(s.result); }
     if (s.state === "error" && s.error) { finish(); showError(s.error); }
@@ -236,6 +468,16 @@ function stream(taskId) {
   es = new EventSource(`/api/tasks/${taskId}/stream`);
   es.addEventListener("resolved", (e) => { sawAny = true; showResolved(JSON.parse(e.data)); });
   es.addEventListener("hop",      (e) => { sawAny = true; addHop(JSON.parse(e.data)); });
+  es.addEventListener("plan",             (e) => { sawAny = true; showPlan(JSON.parse(e.data)); });
+  es.addEventListener("sub_goal_started", (e) => { sawAny = true; subGoalStarted(JSON.parse(e.data)); });
+  es.addEventListener("sub_goal_finished",(e) => { sawAny = true; subGoalFinished(JSON.parse(e.data)); });
+  es.addEventListener("plan_expanded",    (e) => { sawAny = true; planExpanded(JSON.parse(e.data)); });
+  es.addEventListener("gate",             (e) => { sawAny = true; showGate(JSON.parse(e.data)); });
+  es.addEventListener("budget",           (e) => { showBudget(JSON.parse(e.data)); });
+  es.addEventListener("synthesis_started",(e) => {
+    setBusy(true, "Checking every claim against the pages this run actually fetched…");
+  });
+  es.addEventListener("answer",           (e) => { showAnswer(JSON.parse(e.data)); });
   es.addEventListener("queued",   (e) => {
     sawAny = true;
     const p = JSON.parse(e.data).position;

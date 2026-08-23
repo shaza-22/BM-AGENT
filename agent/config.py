@@ -243,3 +243,23 @@ LOOP_MAX_LLM_CALLS = 12  # hard stop well inside a 20/day free tier
 # a fallback: if nothing resolves, the answer is synthesised from accumulated
 # partials with the gaps named, which beats reporting a flat failure.
 PARTIAL_STOPS_NAVIGATION = False
+
+
+# --- Acceptance gate -------------------------------------------------------
+# A second, independent check on the vendored validator's ``resolved``, run
+# from a vantage point it does not have: the whole run rather than one page.
+# See agent/acceptance.py for the argument, and src/person_b/PATCHES.md for
+# the validator bugs it sits alongside (it is not a substitute for those --
+# both are needed, and the gate abstains on the first pages of a run).
+#
+# It is one-way: it can withhold a resolve, never grant one.
+ACCEPTANCE_GATE_ENABLED = True
+
+# How many *other* pages this run must also carry a snippet before it counts
+# as boilerplate rather than content. 2 rather than 1 because two pages in a
+# section can legitimately share a sentence; a third occurrence is chrome.
+GATE_MIN_REPEATS = 2
+
+# Below this length a snippet is not distinctive enough to conclude anything
+# from -- "Cash" appears on every page of a bank site and proves nothing.
+GATE_MIN_SNIPPET_CHARS = 24

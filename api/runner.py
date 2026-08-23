@@ -57,13 +57,25 @@ from typing import Any, Callable
 
 from agent import config as agent_config
 from agent.llm import LLMClient, LLMError, make_llm_client
+from agent.loop import ResearchLoop
 from agent.navigator import Navigator, ValidateFn
 from agent.session import Resolution, Session, resolve_task
 from agent.trail_log import StepLogger
 from api.replay import REPLAY_EVENT_DELAY_S, find_recording, save_run
 from browsing import config as browsing_config
 from browsing.language import detect_language
-from api.schemas import DoneEvent, ErrorEvent, HopEvent, ResolvedEvent, TaskStatus
+from api.schemas import (
+    AnswerEvent,
+    AnswerVerifiedEvent,
+    DoneEvent,
+    ErrorEvent,
+    GateEvent,
+    HopEvent,
+    PlanEvent,
+    ResolvedEvent,
+    SubGoalFinishedEvent,
+    TaskStatus,
+)
 from browsing.fetcher import Fetcher, RateLimiter
 
 logger = logging.getLogger(__name__)
@@ -114,6 +126,12 @@ class TaskRecord:
     result: DoneEvent | None = None
     error: ErrorEvent | None = None
     finished_at: float | None = None
+    # Plan state, accumulated so a poll sees what a stream saw.
+    plan: PlanEvent | None = None
+    sub_goals: list[SubGoalFinishedEvent] = field(default_factory=list)
+    gate_events: list[GateEvent] = field(default_factory=list)
+    verification: AnswerVerifiedEvent | None = None
+    answer: AnswerEvent | None = None
     # Every event in order, so a client that connects late still sees the whole
     # run rather than only what happens from now on.
     history: list[Event] = field(default_factory=list)
@@ -139,6 +157,10 @@ class TaskRecord:
             hops=list(self.hops),
             result=self.result,
             error=self.error,
+            plan=self.plan,
+            sub_goals=list(self.sub_goals),
+            gate_events=list(self.gate_events),
+            verification=self.verification,
         )
 
 
@@ -272,6 +294,14 @@ class TaskRegistry:
                 record.language = data.get("language") or record.language
             elif name == "hop":
                 record.hops.append(HopEvent(**data))
+            elif name == "plan":
+                record.plan = PlanEvent(**data)
+            elif name == "sub_goal_finished":
+                record.sub_goals.append(SubGoalFinishedEvent(**data))
+            elif name == "gate":
+                record.gate_events.append(GateEvent(**data))
+            elif name == "answer_verified":
+                record.verification = AnswerVerifiedEvent(**data)
             elif name == "done":
                 record.result = DoneEvent(**data)
                 record.state = "done"
@@ -311,12 +341,18 @@ class TaskRegistry:
     ) -> None:
         sub_goal = resolution.sub_goal
 
+        # Which sub-goal the navigator is currently walking. Set from the
+        # loop's own events; safe as a plain variable because the loop runs its
+        # sub-goals sequentially on this thread.
+        current = {"id": None, "question": sub_goal}
+
         def on_record(entry: dict[str, Any]) -> None:
             if entry.get("event") != "step":
                 return
             hop = HopEvent(
                 hop=entry["hop"],
-                sub_goal=sub_goal,
+                sub_goal=current["question"],
+                sub_goal_id=current["id"],
                 url=entry["url"],
                 label=entry.get("label"),
                 source=entry.get("source"),
@@ -334,43 +370,91 @@ class TaskRegistry:
             record.hops.append(hop)
             self._publish(record, "hop", hop.model_dump())
 
-        navigator = Navigator(
+        def on_loop_event(name: str, data: dict[str, Any]) -> None:
+            """Mirror a loop event onto the stream and into the polled status.
+
+            Validated through the schema on the way out so the wire shape is
+            checked in one place rather than trusted from the loop.
+            """
+            try:
+                if name == "sub_goal_started":
+                    current["id"] = data.get("sub_goal_id")
+                    current["question"] = data.get("question") or sub_goal
+                if name == "plan":
+                    record.plan = PlanEvent(**data)
+                    data = record.plan.model_dump()
+                elif name == "sub_goal_finished":
+                    finished = SubGoalFinishedEvent(**data)
+                    record.sub_goals.append(finished)
+                    data = finished.model_dump()
+                elif name == "gate":
+                    gate = GateEvent(**data)
+                    record.gate_events.append(gate)
+                    data = gate.model_dump()
+                elif name == "answer_verified":
+                    record.verification = AnswerVerifiedEvent(**data)
+                    data = record.verification.model_dump()
+            except Exception:
+                # A malformed payload is worth a log and a dropped panel, never
+                # a failed run: the navigation itself is the expensive part.
+                logger.exception("could not shape loop event %s", name)
+                return
+            self._publish(record, name, data)
+
+        loop = ResearchLoop(
             llm,
             fetcher=self._fetcher_factory(self._rate_limiter),
-            validate_fn=self._validate_fn,
             step_logger=StepLogger(on_record=on_record, run_id=record.task_id),
             language=record.language,
+            on_event=on_loop_event,
         )
 
         try:
-            result = navigator.navigate(
-                sub_goal,
-                familiar_keys=session.visited_keys() if resolution.used_context else frozenset(),
-            )
+            loop_result = loop.run(sub_goal)
         except LLMError as exc:
             self._fail(record, "llm", str(exc))
             return
 
-        session.add_turn(record.task, resolution, result)
+        # The session stores what the run reached, so a follow-up turn has the
+        # conversation's shape. A NavigationResult is no longer the unit, so a
+        # lightweight stand-in carries the same fields the session reads.
+        session.add_turn(record.task, resolution, loop_result)
 
-        if result.status == "error":
-            self._fail(record, "llm", result.final_reasoning or "the model could not be reached")
+        if loop_result.blocked_reason:
+            self._fail(record, "blocked", loop_result.blocked_reason)
             return
-        if result.status == "blocked":
-            self._fail(record, "blocked", result.final_reasoning or "the site blocked the request")
+        if loop_result.error_reason:
+            # Reported as a failure, not as an empty answer. A spent quota and
+            # an unanswerable question produce the same prose and need opposite
+            # responses from whoever is looking at it.
+            self._fail(record, "llm", loop_result.error_reason)
             return
+
+        answer = AnswerEvent(
+            answer=loop_result.answer,
+            source_urls=list(loop_result.source_urls),
+            not_found=list(loop_result.not_found),
+            support_rate=loop_result.support_rate,
+            claims_total=loop_result.claims_total,
+            claims_supported=loop_result.claims_supported,
+            resolved_count=loop_result.resolved_count,
+            sub_goals_total=len(loop_result.outcomes),
+            budget_exhausted=loop_result.budget_exhausted,
+            gate_rejections=loop_result.gate_rejections,
+        )
+        record.answer = answer
+        self._publish(record, "answer", answer.model_dump())
 
         done = DoneEvent(
-            status=result.status,
-            language=result.language,
-            cap_hit=result.cap_hit,
-            final_reasoning=result.final_reasoning,
-            page_url=result.page["url"] if result.page else None,
-            sources=list(result.sources),
-            hops_used=result.hops_used,
-            pages_fetched=result.pages_fetched,
-            extracted=result.extracted,
-            timing=(result.stats or {}).get("timing", {}),
+            status="resolved" if loop_result.resolved_count else "exhausted",
+            language=record.language,
+            final_reasoning=loop_result.budget_exhausted or "",
+            page_url=next((o.source_url for o in loop_result.outcomes
+                           if o.status == "resolved"), None),
+            sources=list(loop_result.visited_urls),
+            hops_used=sum(o.hops_used for o in loop_result.outcomes),
+            pages_fetched=loop_result.pages_used,
+            answer=answer,
         )
         record.result = done
         record.state = "done"

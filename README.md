@@ -26,12 +26,21 @@ browsing/
   extract_links.py   normalize_url, canonical_key, extract_links, link_label
   _demo.py           argument handling for the __main__ blocks (not agent API)
 agent/
-  config.py          seed URL, caps, model, ranking weights, WAF markers
+  config.py          seed URL, caps, model, ranking weights, WAF markers, budgets
   session.py         Turn/TurnSummary, SessionStore, follow-up resolution
   llm.py             LLMClient protocol, ClaudeLLMClient, FakeLLMClient
   link_selector.py   ranking, prompt, defensive parsing, select_next_link
   navigator.py       the navigation loop -> NavigationResult
+  loop.py            the orchestrator: plan -> navigate each sub-goal -> answer
+  acceptance.py      the acceptance gate: a second opinion on "resolved"
   trail_log.py       JSON Lines step log for the frontend and evaluation
+src/person_b/        VENDORED intelligence layer (planning, extraction,
+                     validation, reasoning, verification). Not developed here.
+                     VENDORED.md records every deviation from their drop;
+                     PATCHES.md records the fifteen bug patches and their
+                     measurements.
+examples/
+  person_a_integration_smoke.py   offline one-command check of the contract
 api/
   app.py             FastAPI routes and the SSE stream
   runner.py          task registry, worker pool, shared rate limiter
@@ -42,6 +51,7 @@ frontend/
 scripts/
   save_fixtures.py   one-off: snapshot live pages into fixtures/live/
   live_navigate.py   watch one sub-goal navigate (demo / smoke check)
+  validator_bench.py labelled benchmark for the vendored validator
 fixtures/
   fixture_urls.txt   the pages to snapshot (data, not code)
   synthetic/         hand-written pages reproducing each site quirk
@@ -698,6 +708,115 @@ Those synthetic pages are small, so they trip the escalation thresholds by
 design; that is what makes the heuristic visible when you run
 `python -m browsing.fetcher`.
 
+## The intelligence layer, and what was patched in it
+
+`src/person_b/` is vendored from the project's second author. It is not
+developed here, so every deviation from their drop is recorded in
+`src/person_b/VENDORED.md` and every behavioural patch in
+`src/person_b/PATCHES.md`, with the measurement behind it.
+
+The short version: probed against the saved fixtures, their deterministic
+validator scored **10/23 with 9 false positives**. The homepage resolved "how
+do I open an account?" off its own navigation — which would have stopped every
+run at hop 0 — and any question containing a category word resolved against any
+page in that category, including "can I open a joint account with my dog?".
+After fifteen patches it scores **21/23 with 0 false positives**. Their own 70
+tests still pass unmodified; `tests/test_person_b_patches.py` guards each fix
+from outside their suite so a re-vendor cannot silently drop one.
+
+Re-run the benchmark with `python3 scripts/validator_bench.py`.
+
+### The known limitation of a deterministic validator
+
+Two benchmark cases still fail, both on the fees hub, and **they are not a
+tuning problem**:
+
+| task | page says | user says |
+|---|---|---|
+| "Where is the schedule of fees and commissions?" | "Fees and Rates" | `schedule`, `commissions` |
+| "Show me the fees and rates document" | "Attachments Section" | `document` |
+
+The words are simply not on the page. The validator matches literal tokens
+because their layer has no model in it by design, so no threshold can bridge a
+paraphrase — the sweep in `PATCHES.md` shows every looser setting buying back
+one of these and paying three *false* positives for it. Stemming would recover
+`commissions` → `commission` and still not `schedule`.
+
+This is a property of deterministic validation, not a bug left unfixed. It
+fails safe: a fees question phrased in the site's own vocabulary resolves; one
+phrased in the user's costs extra hops and lands on `partial` or `exhausted`
+rather than on a wrong answer. Closing it needs a synonym layer or an LLM in
+the validation step.
+
+## The acceptance gate
+
+`agent/acceptance.py` is a second, independent check on `resolved`, and it
+ships **on**. The validator sees one page; the gate sees the run. When a
+verdict resolves, it asks whether the evidence cited also appears on other
+pages fetched this run — because boilerplate is, by definition, the text that
+does not vary between pages. Profiling the fixtures found 60 of 173 link keys
+on all seven.
+
+It contains no product vocabulary at all: it counts repetitions. And it is
+**one-way** — it can withhold a resolve, never grant one, the same rule the
+navigator applies to the link selector, so exactly one component in the system
+may claim a sub-goal is answered.
+
+Its blind spot is stated rather than hidden: on the first pages of a run there
+is nothing to compare against, so it abstains — which is the opposite of what
+you would want, since hop 0 is where a false resolve does most damage. That is
+precisely why the validator's own boilerplate fix (PATCH 5) had to land too.
+Neither check subsumes the other.
+
+Withheld resolves are logged at INFO **and** streamed to the UI, which renders
+them under the hop they refer to. A silent override is what makes a system
+impossible to reason about from outside.
+
+## Plans, budgets and the partial policy
+
+A task is no longer one navigation. `agent/loop.py` plans it into sub-goals,
+navigates each one **live from the seed**, expands the plan from what it finds,
+then synthesises, verifies and finalises.
+
+Per-sub-goal caps do not bound a plan — they multiply. Measured: one
+credit-cards page expands to 13 sub-goals, which at `MAX_PAGES` each is ~180
+requests to a WAF-protected site and 13+ model calls against a 20/day free
+tier. The budgets that hold the line are **global**, spent across the whole
+plan:
+
+| knob | default | |
+|---|---|---|
+| `MAX_SUB_GOALS` | 4 | 1 initial + 3 expansions |
+| `MAX_EXPANSION_DEPTH` | 1 | an expanded sub-goal never expands again |
+| `LOOP_MAX_PAGES` | 25 | global, not per sub-goal |
+| `LOOP_MAX_LLM_CALLS` | 12 | well inside a 20/day free tier |
+
+Person B's own `max_expansion_sub_goals` default of 20 is overridden at
+construction time rather than edited, so their package re-vendors cleanly.
+
+When a budget runs out, the remaining sub-goals are marked not-available *with
+the reason* and appear in the answer's "Not found" list. Stopping early is
+allowed; omitting it silently is not.
+
+**`partial` does not stop navigation.** It means the entity is relevant and
+some requested fields were found — exactly the state where the rest is one hop
+deeper, on a detail page or a linked PDF. Stopping wastes the remaining hops;
+discarding the evidence wastes work already paid for. So the loop keeps going
+and keeps the partial: if nothing resolves, the answer is synthesised from
+accumulated partials with the gaps named.
+
+## What "verified" means on screen
+
+`finalize` strikes the prose of every claim that fails attribution, not only
+when all of them fail, and the UI shows `support_rate` as a bar with the raw
+count beside it. When there are no claims at all the bar is replaced by a plain
+statement — a 100% bar over zero claims would be the most reassuring lie the
+interface could tell.
+
+Claims are checked against exactly the pages the run fetched. Nothing enters
+the loop from a fixture, a cache or an index, so a claim citing a page the run
+never visited cannot survive.
+
 ## Known gaps
 
 - The paths in `fixtures/fixture_urls.txt` were traced by hand and may be
@@ -720,3 +839,19 @@ design; that is what makes the heuristic visible when you run
 - Neither provider has been exercised against its live API from this
   environment — both paths are tested against SDK-shaped stubs only. The first
   real call is worth watching with `--verbose`.
+- **The vendored layer is topic-coupled.** `planner.py`, `validator.py` and
+  `extractor.py` all branch on hardcoded product categories. The patches remove
+  the cases that produced *wrong verdicts*, but the structure remains: delete
+  the word "card" from `src/person_b/` and it stops working. This half holds
+  the opposite constraint. Listed in full at the end of `PATCHES.md`.
+- **Arabic is unsupported in the intelligence layer.** Their extraction mangles
+  Arabic text and every Arabic task validates as `unresolved`. Navigation,
+  language detection and the UI all handle Arabic correctly, so an Arabic run
+  navigates properly and then fails to resolve — visibly, in the plan panel,
+  rather than returning a wrong answer. Person B owns this; nothing here
+  compensates for it.
+- The acceptance gate abstains on the first pages of a run, when there is not
+  yet enough to compare against (see above). It is a backstop, not a first line.
+- The evaluation pipeline is still unbuilt. `scripts/validator_bench.py`
+  measures the validator in isolation and their `PersonBEvaluator` tests their
+  layer offline; neither scores end-to-end navigation.

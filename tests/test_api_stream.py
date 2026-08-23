@@ -80,10 +80,24 @@ class TestOrdering:
         assert names[-1] == "done"
         assert "hop" in names
 
-    def test_hops_arrive_in_order(self):
-        hops = [data["hop"] for name, data in collect(build()) if name == "hop"]
-        assert hops == sorted(hops)
-        assert hops[0] == 0
+    def test_hops_arrive_in_order_within_each_sub_goal(self):
+        """Hop numbering restarts per sub-goal, and must climb within one.
+
+        It used to be monotonic across the whole stream, because a task was
+        exactly one navigation. A task is now a plan: each sub-goal walks live
+        from the seed and numbers its own hops from 0, which is why every hop
+        carries ``sub_goal`` and the UI groups by it. Asserting a single global
+        sequence would now be asserting that plans do not exist.
+        """
+        by_sub_goal: dict[str, list[int]] = {}
+        for name, data in collect(build()):
+            if name == "hop":
+                by_sub_goal.setdefault(data["sub_goal"], []).append(data["hop"])
+
+        assert by_sub_goal, "no hops were streamed"
+        for sub_goal, hops in by_sub_goal.items():
+            assert hops == sorted(hops), f"{sub_goal!r} streamed hops out of order: {hops}"
+            assert hops[0] == 0, f"{sub_goal!r} did not start at the seed"
 
     def test_the_seed_is_the_first_hop(self):
         first = next(data for name, data in collect(build()) if name == "hop")

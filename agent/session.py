@@ -71,6 +71,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
+from typing import Any
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Iterable
 
@@ -143,6 +144,28 @@ class TurnSummary:
     hops: tuple[HopSummary, ...]
 
     @classmethod
+    def from_loop(cls, result: Any) -> "TurnSummary":
+        """Summarise a whole plan as one conversational turn.
+
+        A turn is what the user asked, not what the planner did with it, so a
+        multi-sub-goal run still records as one turn. ``status`` reports
+        whether anything resolved, which is what a follow-up needs to know.
+        """
+        resolved = [o for o in result.outcomes if o.status == "resolved"]
+        return cls(
+            status="resolved" if resolved else "exhausted",
+            page_url=resolved[0].source_url if resolved else None,
+            final_reasoning=(resolved[0].reason if resolved
+                             else (result.budget_exhausted or "nothing resolved")),
+            sources=tuple(result.visited_urls),
+            hops=tuple(
+                HopSummary(url=step.url, label=step.label, source=step.source,
+                           reasoning=step.reasoning)
+                for step in result.trail
+            ),
+        )
+
+    @classmethod
     def from_result(cls, result: "NavigationResult") -> "TurnSummary":
         return cls(
             status=result.status,
@@ -204,7 +227,8 @@ class Session:
             task=task,
             resolved_sub_goal=resolution.sub_goal,
             used_context=resolution.used_context,
-            summary=TurnSummary.from_result(result),
+            summary=(TurnSummary.from_loop(result) if hasattr(result, "outcomes")
+                     else TurnSummary.from_result(result)),
             timestamp=datetime.now(timezone.utc).isoformat(),
         )
         self.turns.append(turn)

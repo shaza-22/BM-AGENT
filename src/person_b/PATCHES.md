@@ -62,7 +62,7 @@ making, so tolerance ships at 0 and the false negative below is left standing.
 **The stopword list and the tolerance interact.** Re-run the sweep after
 touching either.
 
-### What is still wrong, and why it was left
+### A known limitation of deterministic validation (not a tuning target)
 
 Both remaining false negatives are the same page and the same cause:
 
@@ -82,6 +82,13 @@ either case.
 Practical effect: a fees question phrased in the site's own vocabulary
 resolves; one phrased in the user's may cost extra hops and land on `partial`
 or `exhausted` rather than `resolved`. It fails in the safe direction.
+
+**Treat this as a documented property of the deterministic validator, not as
+something to tune.** The tolerance sweep above is the evidence: every setting
+that recovers these two cases costs three or more false positives, and a false
+positive is a wrong answer delivered confidently while a false negative is a
+few extra hops. Anyone tempted to loosen the knob should re-run the sweep
+first and read this paragraph second.
 
 ---
 
