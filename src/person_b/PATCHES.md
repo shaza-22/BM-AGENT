@@ -34,7 +34,10 @@ was chosen, so they are not tuned to a threshold.
 | | correct | false positives | false negatives |
 |---|---|---|---|
 | **Before** | 10 / 23 | **9** | 4 |
-| **After** | 21 / 23 | **0** | 2 |
+| **After** | 24 / 26 | **0** | 2 |
+
+(The set grew from 23 to 26 as real runs turned up phrasings the fixtures did
+not cover. Add to it rather than adjusting the rule by feel.)
 
 A *false positive* is the expensive one: the validator resolves on a page that
 cannot answer the question, so navigation stops there and the run reports
@@ -48,10 +51,10 @@ cases (`python3 -c "import sys; sys.path[:0]=['scripts','src']; import validator
 
 | tolerance | correct | FP | FN | |
 |---|---|---|---|---|
-| **0** | 21/23 | **0** | 2 | every content word must appear — **shipped** |
-| 1 | 19/23 | 3 | 1 | |
-| 2 | 18/23 | 5 | 0 | |
-| off | 15/23 | 8 | 0 | the original behaviour |
+| **0** | 24/26 | **0** | 2 | every content word must appear — **shipped** |
+| 1 | — | 3+ | 1 | buys one back, pays three |
+| 2 | — | 5+ | 0 | |
+| off | — | 8+ | 0 | the original behaviour |
 
 Loosening buys back the fees-hub false negative and pays three false positives
 for it — "does Banque Misr offer student accounts?", "…a cryptocurrency deposit
@@ -115,6 +118,14 @@ gone. This also keeps their `test_dynamic_plan_expansion` passing on its exact
 expected sub-goal string.
 
 ### PATCH 3 — `validation/validator.py`: stopword list
+
+**Extended once more after a live run.** *"my salary is 7000 can i take a
+loan"* reached the right page and was rejected for not discussing `salary` and
+`take`. `get` was already a stopword; `take`, `apply`, `obtain`, `receive` and
+`qualify` are the same word wearing different clothes — they say what the
+person wants to *do*, never what about. `salary` is deliberately still
+required; see the note below the table.
+
 
 Added generic question scaffolding (`offer`, `tell`, `about`, `show`, `where`,
 `are`, `can`, …), generic classifiers (`type`, `types`, `kind`, `options`, …),

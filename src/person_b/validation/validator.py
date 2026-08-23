@@ -36,6 +36,14 @@ _COMMON_QUERY_STOPWORDS = {
     "with", "from", "any", "some", "there", "their", "this", "that",
     "have", "has", "had", "you", "your", "our", "its", "they", "them",
     "which", "who", "whom", "when", "why", "where", "banking", "bank",
+    # Generic verbs for acquiring a product. "Can I take a loan", "how do I
+    # apply for a card", "how can I get an account" -- these say what the
+    # person wants to do, never *what about*, so requiring them on the page
+    # rejects the page that answers the question. "get" was already here; the
+    # rest are the same word wearing different clothes. Found by a live run:
+    # "my salary is 7000 can i take a loan" was rejected partly on "take".
+    "take", "takes", "taking", "apply", "applies", "applying",
+    "obtain", "receive", "qualify", "qualifies",
     # Generic classifier words. "Find Banque Misr accounts and deposit types"
     # is asking about accounts and deposits; "types" adds no subject matter,
     # and requiring it on the page rejected the very hub that answers the

@@ -59,7 +59,15 @@ CASES: list[tuple[str, str, str, str]] = [
     ("Tell me about Banque Misr payment cards", CARDS, "resolve",
      "cards hub carries a descriptive body paragraph"),
 
+    # --- how a person actually phrases it ----------------------------------
+    ("Can I take a personal loan?", LOANS, "resolve",
+     "the loans page describes Personal loans; 'take' is scaffolding, not subject"),
+    ("How do I apply for a car loan?", LOANS, "resolve",
+     "Auto Loan is described on the page; 'apply' carries no subject matter"),
+
     # --- should reject: right category, wrong subject ----------------------
+    ("My salary is 7000, can I take a loan?", LOANS, "reject",
+     "eligibility question; this page states no salary requirement anywhere"),
     ("Does Banque Misr offer a cryptocurrency deposit account?", ACCOUNTS, "reject",
      "no crypto anywhere in the fixtures"),
     ("What is the interest rate on a Martian savings account?", ACCOUNTS, "reject",

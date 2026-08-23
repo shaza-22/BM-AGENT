@@ -354,3 +354,36 @@ def test_validator_benchmark_has_no_false_positives() -> None:
     ]
     # Baseline before the patches was 10/23 with 9 false positives.
     assert report["correct"] >= 21, f"{report['correct']}/{report['total']}"
+
+
+class TestAcquisitionVerbsAreNotSubjectMatter:
+    """Found by a live run, not by the benchmark.
+
+    "my salary is 7000 can i take a loan" reached the right page and was
+    rejected for not discussing 'salary' and 'take'. 'take' is scaffolding --
+    it says what the person wants to do, never what about -- and 'get' was
+    already a stopword, so it was the same word wearing different clothes.
+
+    'salary' is a different matter and is deliberately still required: see
+    test_an_eligibility_question_is_not_answered_by_a_product_list.
+    """
+
+    @pytest.mark.parametrize("task", [
+        "Can I take a personal loan?",
+        "How do I apply for a car loan?",
+        "How can I obtain a mortgage loan?",
+    ])
+    def test_a_question_phrased_as_acquiring_still_resolves(self, task: str) -> None:
+        result = verdict_for(task, LOANS)
+        assert result["resolved"] is True, result.get("reason")
+
+    def test_an_eligibility_question_is_not_answered_by_a_product_list(self) -> None:
+        """This rejection is correct, and must not be 'fixed'.
+
+        The loans hub describes products; it states no salary requirement
+        anywhere. A page that cannot answer the question asked should not
+        resolve it, however plausibly it sits in the right category.
+        """
+        result = verdict_for("My salary is 7000, can I take a loan?", LOANS)
+        assert result["resolved"] is False
+        assert "salary" in result.get("reason", "")
