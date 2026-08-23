@@ -304,3 +304,71 @@ class TestClaimsCarryValues:
 
         facts = _row_facts({"records": [{"Issuance": "250 EGP"}]})
         assert facts == [{"label": "Issuance", "field": "Issuance", "value": "250 EGP"}]
+
+
+class TestTheAbbreviationSplitBug:
+    """Two table rows merged in a generated answer, with one label beheaded.
+
+    Reported from a live run:
+
+        "Reissuance of are placement for lost or damaged cards: EGP100
+         S and other banks' machines within Egypt: 2% of the amount withdrawn
+         with minimum EGP15"
+
+    "Cash withdrawals through BM ATMs and P.O." had gone missing and the
+    remainder had attached itself to the previous row's value.
+
+    The extraction was innocent -- these are two clean rows all the way through
+    Person B's table parser. The damage was done here: the sentence splitter
+    treated every "." as a boundary, so "P.O.S" became three fragments, the two
+    that carried no figure were struck, and the survivors were rejoined with a
+    space straight onto the previous line.
+    """
+
+    ROW_LABEL = "Cash withdrawals through BM ATMs and P.O.S and other banks’ machines within Egypt"
+    ROW_VALUE = "2% of the amount withdrawn with minimum EGP15"
+    PREV_LABEL = "Reissuance of are placement for lost or damaged cards"
+
+    FIXTURE = ("fixtures/live/home-smes-retail-banking-pages-cards-credit-cards-"
+               "pages-classic-credit-cards.txt")
+
+    def test_the_fixture_still_holds_the_row_intact(self):
+        """Guards the extraction side, which was suspected and is innocent."""
+        from person_b.extraction.extractor import extract_content
+
+        raw = (pathlib.Path(__file__).resolve().parent.parent / self.FIXTURE).read_text(
+            encoding="utf-8", errors="replace")
+        tables = extract_content(raw, ["fees"]).extracted.get("tables", [])
+        rows = [rec for t in tables for rec in (t.get("records") or [])]
+        labels = [str(list(r.values())[0]) for r in rows if r]
+        assert self.ROW_LABEL in labels, "the row is no longer parsed as one row"
+        assert self.PREV_LABEL in labels
+
+    def test_an_abbreviation_does_not_split_a_sentence(self):
+        from agent.grounding import _split_sentences
+
+        parts = _split_sentences(f"{self.ROW_LABEL}: {self.ROW_VALUE}")
+        assert len(parts) == 1, parts
+        assert "P.O.S" in parts[0]
+
+    def test_the_two_rows_survive_grounding_separately(self):
+        from agent.grounding import check_grounding
+
+        claims = [
+            {"entity": self.PREV_LABEL, "value": "EGP100"},
+            {"entity": self.ROW_LABEL, "value": self.ROW_VALUE},
+        ]
+        text = f"{self.PREV_LABEL}: EGP100\n{self.ROW_LABEL}: {self.ROW_VALUE}"
+        report = check_grounding(text, claims)
+
+        assert report.struck == [], report.struck
+        assert self.ROW_LABEL in report.text, "the label was beheaded again"
+        # The exact corruption: the tail of one row welded onto the previous.
+        assert "EGP100 S and other banks" not in report.text
+
+    def test_other_abbreviations_survive_too(self):
+        from agent.grounding import _split_sentences
+
+        for text in ["Available at the U.S. branch.", "Contact Mr. Hassan for details.",
+                     "Open 9 a.m. to 5 p.m. daily."]:
+            assert len(_split_sentences(text)) == 1, text

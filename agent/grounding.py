@@ -59,6 +59,21 @@ _NUMBER = re.compile(r"\d[\d,.]*%?")
 # wrote. Same reason "P.O.S" must survive intact.
 _SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+")
 
+# A trailing "." that belongs to an abbreviation rather than to the sentence.
+# "P.O.S" needs no help -- its dots are followed by letters -- but "the U.S.
+# branch" and "9 a.m. to 5 p.m." do, and splitting them produces fragments
+# that carry no figure and are then struck as unsupported assertions.
+_ABBREVIATION = re.compile(r"(^|\s)([A-Za-z]\.|(?:[A-Za-z]\.){2,})$")
+_KNOWN_ABBREVIATIONS = frozenset({
+    "mr.", "mrs.", "ms.", "dr.", "prof.", "no.", "vs.", "etc.",
+    "e.g.", "i.e.", "a.m.", "p.m.", "approx.", "max.", "min.",
+})
+
+
+def _ends_in_abbreviation(fragment: str) -> bool:
+    last = fragment.rsplit(" ", 1)[-1].lower() if fragment else ""
+    return bool(last in _KNOWN_ABBREVIATIONS or _ABBREVIATION.search(fragment))
+
 
 def _split_sentences(text: str) -> list[str]:
     """Sentences, with each line its own unit.
@@ -71,7 +86,17 @@ def _split_sentences(text: str) -> list[str]:
         if not line.strip():
             out.append("")          # preserve blank lines for paragraphing
             continue
-        out.extend(part for part in _SENTENCE_BREAK.split(line.strip()) if part.strip())
+        parts: list[str] = []
+        for part in _SENTENCE_BREAK.split(line.strip()):
+            if not part.strip():
+                continue
+            # Rejoin onto the previous fragment when the break was an
+            # abbreviation's full stop rather than a sentence's.
+            if parts and _ends_in_abbreviation(parts[-1]):
+                parts[-1] = f"{parts[-1]} {part}"
+            else:
+                parts.append(part)
+        out.extend(parts)
     return out
 
 MIN_ANCHOR_CHARS = 4
