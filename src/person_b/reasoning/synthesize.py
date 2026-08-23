@@ -126,7 +126,14 @@ def synthesize(
                         c = Claim(
                             id=f"c_{uuid.uuid4().hex[:8]}",
                             statement=statement,
-                            field="entity_list",  # PATCH 15: was "credit_cards_list"
+                            # PATCH 15: field was "credit_cards_list".
+                            # `entity` is set because the answer composer uses
+                            # it as the human label for the fact and falls back
+                            # to `field` when it is missing -- which put the
+                            # internal identifier "entity_list" in front of the
+                            # model, and it dutifully wrote it into the answer.
+                            entity="Products listed on this page",
+                            field="entity_list",
                             value=", ".join(card_names[:8]),
                             source_url=src_url,
                         )

@@ -110,10 +110,26 @@ class Composition:
         }
 
 
+def _humanise_label(label: str) -> str:
+    """Never put an internal identifier in front of the model.
+
+    Facts are labelled by ``entity``, falling back to ``field`` -- and ``field``
+    holds programmatic names like ``entity_list``. The model has no way to know
+    that is not what the bank calls the thing, so it copies it into the answer
+    verbatim, and the reader is shown a variable name. Anything that looks like
+    an identifier is turned back into words here.
+    """
+    text = (label or "").strip()
+    if "_" in text and " " not in text:
+        text = text.replace("_", " ").strip()
+        return text[:1].upper() + text[1:]
+    return text
+
+
 def _facts_block(claims: list[dict], limit: int) -> str:
     lines = []
     for index, claim in enumerate(claims[:limit], 1):
-        label = claim.get("entity") or claim.get("field") or ""
+        label = _humanise_label(claim.get("entity") or claim.get("field") or "")
         value = claim.get("value") or ""
         source = claim.get("source_url") or ""
         if label and value:

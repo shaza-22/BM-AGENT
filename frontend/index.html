@@ -304,13 +304,32 @@ let turn = null;
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
 
+// Internal identifiers that have reached a saved answer. The composer no
+// longer shows the model any of these — a fact's label is humanised before it
+// goes into the prompt — but an answer recorded before that fix has the raw
+// identifier baked into its text, and a recording is replayed verbatim. So
+// they are also repaired at render time.
+//
+// Narrow on purpose: only a snake_case token at the start of a line, directly
+// before a dash or colon. Nothing a bank would legitimately write looks like
+// that, and anchoring to line start keeps it away from prose.
+const INTERNAL_LABELS = { entity_list: "Products listed on this page" };
+const IDENTIFIER_LABEL = /^(\s*(?:[-*]\s+)?)([a-z][a-z0-9]*(?:_[a-z0-9]+)+)(\s*(?:—|–|-|:)\s*)/gm;
+
+function humaniseLabels(text) {
+  return String(text || "").replace(IDENTIFIER_LABEL, (_m, lead, id, sep) => {
+    const words = INTERNAL_LABELS[id] || id.replace(/_/g, " ");
+    return lead + words.charAt(0).toUpperCase() + words.slice(1) + sep;
+  });
+}
+
 // A deliberately tiny markdown renderer: bold, headings, bullets, paragraphs.
 // The composer is asked for grouped output with short bold headings, and this
 // is what makes that structure visible instead of a run-on paragraph.
 // Everything is escaped first, so only the patterns below can produce markup —
 // model output is never inserted as HTML.
 function md(text) {
-  return esc(text || "").split(/\n{2,}/).map((block) => {
+  return esc(humaniseLabels(text)).split(/\n{2,}/).map((block) => {
     const lines = block.split("\n").filter((l) => l.trim());
     if (!lines.length) return "";
     const out = []; let list = [];

@@ -372,3 +372,49 @@ class TestTheAbbreviationSplitBug:
         for text in ["Available at the U.S. branch.", "Contact Mr. Hassan for details.",
                      "Open 9 a.m. to 5 p.m. daily."]:
             assert len(_split_sentences(text)) == 1, text
+
+
+class TestInternalIdentifiersNeverReachTheReader:
+    """A fact's label is ``entity``, falling back to ``field``.
+
+    ``field`` holds programmatic names. When PATCH 15 renamed the entity-list
+    claim's field to ``entity_list`` without giving it an ``entity``, the
+    fallback put that identifier in front of the model -- which has no way to
+    know it is not what the bank calls the thing, and copied it into the answer.
+    A live recording came back reading "entity_list — Credit Card, Debit
+    cards, …".
+    """
+
+    def test_the_entity_list_claim_carries_a_human_label(self):
+        from person_b.api import synthesize
+
+        result = synthesize("what cards are there", validated_results=[{
+            "source_url": "https://www.banquemisr.com/cards",
+            "extracted": {"entities": [{"name": "Credit Card"}, {"name": "Debit cards"},
+                                       {"name": "Salaries Cards"}]},
+        }])
+        claim = result["claims"][0]
+        assert claim["entity"], "no human label, so the composer falls back to `field`"
+        assert "_" not in claim["entity"]
+
+    def test_the_model_is_never_shown_an_identifier(self):
+        from agent.answer import _facts_block
+
+        block = _facts_block([{"field": "entity_list", "value": "Credit Card, Debit cards",
+                               "source_url": "https://x/y"}], 5)
+        assert "entity_list" not in block
+        assert "Entity list" in block
+
+    def test_a_future_internal_field_is_humanised_too(self):
+        from agent.answer import _humanise_label
+
+        assert _humanise_label("some_future_field") == "Some future field"
+        assert _humanise_label("Issuance") == "Issuance"
+        assert _humanise_label("Supplementary cards issuance and renewal") == \
+            "Supplementary cards issuance and renewal"
+
+    def test_a_real_label_containing_no_underscore_is_left_alone(self):
+        from agent.answer import _humanise_label
+
+        for label in ["Interest rate", "Penalty for delay", "3", ""]:
+            assert _humanise_label(label) == label
