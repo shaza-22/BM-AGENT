@@ -4,162 +4,300 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Banque Misr Research Assistant</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
+  /* ---------------------------------------------------------------------
+     Banque Misr's own identity: the deep maroon from their site, a warm
+     off-white ground, gold used only as an accent. The point is that this
+     should look like it belongs next to the bank's website rather than like
+     developer output.
+     --------------------------------------------------------------------- */
   :root {
-    --bg:#f6f7f9; --panel:#fff; --ink:#16191d; --muted:#5b636e; --line:#e3e6ea;
-    --accent:#5a3fd6; --ok:#1a7f4b; --warn:#8a6100; --warn-bg:#fdf6e3; --bad:#a32626;
-    --nav:#e8eaf6; --body:#e6f4ea; --footer:#fdece8;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root { --bg:#14161a; --panel:#1c1f25; --ink:#e9ecf1; --muted:#9aa3b0; --line:#2b3038;
-            --accent:#a595f5; --ok:#57c78c; --warn:#e0b352; --warn-bg:#2a2416; --bad:#f08a8a;
-            --nav:#252a44; --body:#1d3327; --footer:#3a2422; }
+    --maroon:#8B1538; --maroon-deep:#6E1029; --maroon-soft:#F4E8EC;
+    --gold:#C9A227; --gold-soft:#FBF4DF;
+    --bg:#FAF7F4; --panel:#FFFFFF; --ink:#1E1B1C; --muted:#6E6569;
+    --line:#E9E1DD; --line-soft:#F2ECE8;
+    --ok:#1F7A4C; --ok-soft:#E3F1E9; --warn:#9A6B00; --warn-bg:#FDF6E6; --bad:#A32626;
+    --nav:#EDE7F3; --body:#E7F1EA; --footer:#FBEBE6;
+    --shadow:0 1px 2px rgba(30,27,28,.05), 0 6px 20px rgba(30,27,28,.05);
+    --radius:14px;
   }
   * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif; }
-  .wrap { max-width:860px; margin:0 auto; padding:28px 20px 80px; }
-  h1 { font-size:19px; margin:0 0 2px; }
-  .sub { color:var(--muted); font-size:13px; margin-bottom:22px; }
-  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px; }
-  form { display:flex; gap:8px; }
-  input[type=text] { flex:1; padding:11px 13px; font-size:15px; color:var(--ink); text-align:start;
-    background:var(--panel); border:1px solid var(--line); border-radius:8px; }
-  input[type=text]:focus { outline:2px solid var(--accent); outline-offset:-1px; }
-  button { padding:11px 18px; font-size:15px; font-weight:600; color:#fff; background:var(--accent);
-    border:0; border-radius:8px; cursor:pointer; }
-  button:disabled { opacity:.5; cursor:default; }
-  .interpreting { margin-top:12px; padding:10px 12px; background:var(--warn-bg);
-    border-left:3px solid var(--warn); border-radius:0 6px 6px 0; font-size:13.5px; }
+  html { -webkit-text-size-adjust:100%; }
+  body {
+    margin:0; background:var(--bg); color:var(--ink);
+    font:400 15.5px/1.65 "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  /* --- masthead -------------------------------------------------------- */
+  header.top {
+    background:var(--maroon); color:#fff;
+    border-bottom:3px solid var(--gold);
+  }
+  .top-inner { max-width:880px; margin:0 auto; padding:20px 24px; display:flex;
+               align-items:center; gap:14px; }
+  .mark {
+    width:34px; height:34px; border-radius:9px; flex:none;
+    background:var(--gold); color:var(--maroon-deep);
+    display:grid; place-items:center; font-weight:700; font-size:13px;
+    letter-spacing:.02em;
+  }
+  .top h1 { font-size:17px; font-weight:600; margin:0; letter-spacing:-.01em; }
+  .top .tag { font-size:12.5px; color:rgba(255,255,255,.72); margin-top:1px; }
+
+  /* --- thread ---------------------------------------------------------- */
+  .wrap { max-width:880px; margin:0 auto; padding:26px 24px 150px; }
+  .turn { margin-bottom:30px; }
+  .turn:last-child { margin-bottom:8px; }
+
+  .ask {
+    display:flex; justify-content:flex-end; margin-bottom:14px;
+  }
+  .ask .bubble {
+    background:var(--maroon); color:#fff; padding:11px 16px;
+    border-radius:16px 16px 4px 16px; max-width:78%;
+    font-size:15px; box-shadow:var(--shadow); text-align:start;
+  }
+
+  .reply { display:flex; gap:12px; align-items:flex-start; }
+  .avatar {
+    width:28px; height:28px; border-radius:8px; flex:none; margin-top:2px;
+    background:var(--maroon-soft); color:var(--maroon);
+    display:grid; place-items:center; font-size:11px; font-weight:700;
+  }
+  .reply-body { flex:1; min-width:0; }
+
+  .card {
+    background:var(--panel); border:1px solid var(--line);
+    border-radius:var(--radius); box-shadow:var(--shadow);
+    padding:18px 20px; margin-bottom:12px;
+  }
+  .card.tight { padding:14px 18px; }
+  h3.section {
+    font-size:11px; text-transform:uppercase; letter-spacing:.09em;
+    color:var(--muted); margin:0 0 12px; font-weight:600;
+  }
+
+  /* --- composer -------------------------------------------------------- */
+  .composer {
+    position:fixed; left:0; right:0; bottom:0;
+    background:linear-gradient(to top, var(--bg) 62%, rgba(250,247,244,.92) 82%, rgba(250,247,244,0));
+    padding:30px 24px 22px;
+  }
+  .composer form {
+    max-width:880px; margin:0 auto; display:flex; gap:10px;
+    background:var(--panel); border:1px solid var(--line);
+    border-radius:16px; padding:7px 7px 7px 8px; box-shadow:var(--shadow);
+  }
+  input[type=text] {
+    flex:1; border:0; background:transparent; color:var(--ink);
+    font:inherit; padding:10px 10px; text-align:start; min-width:0;
+  }
+  input[type=text]:focus { outline:none; }
+  .composer form:focus-within { border-color:var(--maroon); }
+  button.send {
+    border:0; border-radius:11px; cursor:pointer; padding:10px 20px;
+    background:var(--maroon); color:#fff; font:600 14.5px/1 "Inter", sans-serif;
+    transition:background .15s;
+  }
+  button.send:hover:not(:disabled) { background:var(--maroon-deep); }
+  button.send:disabled { opacity:.45; cursor:default; }
+  .status { max-width:880px; margin:9px auto 0; color:var(--muted);
+            font-size:13px; display:flex; align-items:center; gap:8px; }
+  .spin { width:7px; height:7px; border-radius:50%; background:var(--maroon);
+          animation:p 1.1s ease-in-out infinite; flex:none; }
+  @keyframes p { 0%,100%{opacity:.25} 50%{opacity:1} }
+
+  /* --- interpreting ---------------------------------------------------- */
+  .interpreting {
+    background:var(--gold-soft); border-left:3px solid var(--gold);
+    border-radius:0 10px 10px 0; padding:11px 14px; margin-bottom:12px;
+    font-size:13.5px;
+  }
   .interpreting b { font-weight:600; }
-  .hop { border-top:1px solid var(--line); padding:13px 0; }
-  .hop:first-child { border-top:0; }
-  .hopline { display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; }
-  .num { color:var(--muted); font-variant-numeric:tabular-nums; font-size:12.5px; min-width:38px; }
-  .label { font-weight:600; }
-  .badge { font-size:11px; text-transform:uppercase; letter-spacing:.04em; padding:2px 7px;
-    border-radius:20px; color:var(--ink); }
+  .replay-badge {
+    display:inline-flex; align-items:center; gap:6px; font-size:12px;
+    background:var(--maroon-soft); color:var(--maroon-deep);
+    padding:4px 10px; border-radius:20px; margin-bottom:10px; font-weight:500;
+  }
+
+  /* --- plan ------------------------------------------------------------ */
+  .sg { display:flex; gap:11px; align-items:flex-start; padding:9px 0;
+        border-top:1px solid var(--line-soft); }
+  .sg:first-child { border-top:0; padding-top:0; }
+  .sg .dot { width:17px; height:17px; border-radius:50%; flex:none; margin-top:3px;
+             display:grid; place-items:center; font-size:10px; font-weight:700;
+             background:var(--line-soft); color:var(--muted); }
+  .sg.resolved .dot { background:var(--ok-soft); color:var(--ok); }
+  .sg.partial  .dot { background:var(--warn-bg); color:var(--warn); }
+  .sg.running  .dot { background:var(--maroon-soft); color:var(--maroon);
+                      animation:p 1.1s ease-in-out infinite; }
+  .sg .q { flex:1; text-align:start; font-size:14.5px; }
+  .sg.pending .q { color:var(--muted); }
+  .sg.running .q { font-weight:600; }
+  .sg .why2 { color:var(--muted); font-size:12.5px; margin-top:1px; }
+  .budget { margin-top:12px; padding-top:11px; border-top:1px solid var(--line-soft);
+            font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums; }
+
+  /* --- trail ----------------------------------------------------------- */
+  details.trail > summary {
+    cursor:pointer; list-style:none; display:flex; align-items:center; gap:9px;
+    font-size:11px; text-transform:uppercase; letter-spacing:.09em;
+    color:var(--muted); font-weight:600;
+  }
+  details.trail > summary::-webkit-details-marker { display:none; }
+  details.trail > summary::after {
+    content:"▸"; margin-inline-start:auto; font-size:12px;
+    transition:transform .15s; text-transform:none; letter-spacing:0;
+  }
+  details.trail[open] > summary::after { transform:rotate(90deg); }
+  details.trail[open] > summary { margin-bottom:14px; }
+  .sgroup { margin-top:14px; padding-top:12px; border-top:1px solid var(--line-soft); }
+  .sgroup:first-child { margin-top:0; padding-top:0; border-top:0; }
+  .sgroup > .head { font-size:12px; color:var(--muted); margin-bottom:8px; text-align:start; }
+
+  .hop { display:grid; grid-template-columns:26px 1fr; gap:0 12px; padding:11px 0; }
+  .hop + .hop { border-top:1px solid var(--line-soft); }
+  .rail { grid-row:1 / span 3; position:relative; }
+  .rail i {
+    position:absolute; inset-inline-start:9px; top:6px;
+    width:8px; height:8px; border-radius:50%; background:var(--maroon);
+  }
+  .rail::before {
+    content:""; position:absolute; inset-inline-start:12.5px; top:16px; bottom:-14px;
+    width:1px; background:var(--line);
+  }
+  .hop:last-child .rail::before { display:none; }
+  .hopline { display:flex; align-items:baseline; gap:9px; flex-wrap:wrap; }
+  .num { color:var(--muted); font-size:11.5px; font-variant-numeric:tabular-nums; }
+  .label { font-weight:600; font-size:14.5px; }
+  .badge {
+    font-size:10px; text-transform:uppercase; letter-spacing:.06em; font-weight:600;
+    padding:2px 8px; border-radius:20px; color:var(--ink);
+  }
   .badge.nav{background:var(--nav)} .badge.body{background:var(--body)} .badge.footer{background:var(--footer)}
-  /* The reasoning is the point of the whole screen: it is what shows the agent
-     deciding rather than a script running. */
+  /* The reasoning is the point of the whole screen: it is what shows the
+     agent deciding rather than a script running. Given room accordingly. */
+  .why { margin-top:5px; font-size:14px; color:var(--ink); text-align:start; }
+  .meta { margin-top:5px; color:var(--muted); font-size:11.5px;
+          font-variant-numeric:tabular-nums; word-break:break-all;
+          display:flex; flex-wrap:wrap; gap:4px 10px; }
+  .conf { display:inline-flex; align-items:center; gap:5px; }
+  .conf b { width:34px; height:3px; border-radius:2px; background:var(--line);
+            display:inline-block; overflow:hidden; }
+  .conf b i { display:block; height:100%; background:var(--maroon); }
   /* dir="auto" is per-string by definition: the browser picks direction from
      the first strong character, so one run can hold Arabic and English lines
      without flipping the page. URLs and badges stay explicitly ltr. */
-  .why { margin-top:6px; padding-left:46px; color:var(--ink); font-size:14px; text-align:start; }
   [dir=auto] { text-align:start; }
   .meta, .badge, ul.sources { direction:ltr; text-align:left; }
-  .meta { margin-top:4px; padding-left:46px; color:var(--muted); font-size:12.5px;
-    font-variant-numeric:tabular-nums; word-break:break-all; }
-  .verdict { padding:14px 16px; border-radius:10px; border:1px solid var(--line); }
-  .verdict h2 { font-size:15px; margin:0 0 4px; }
-  .verdict p { margin:0; font-size:14px; }
-  .v-ok    { border-left:4px solid var(--ok); }
-  .v-warn  { border-left:4px solid var(--warn); background:var(--warn-bg); }
-  .v-none  { border-left:4px solid var(--muted); }
-  .v-bad   { border-left:4px solid var(--bad); }
-  .caveat { margin-top:6px; font-size:13px; color:var(--muted); }
-  ul.sources { margin:8px 0 0; padding-left:20px; font-size:13.5px; word-break:break-all; }
-  ul.sources a { color:var(--accent); }
-  .timing { margin-top:10px; font-size:12.5px; color:var(--muted); font-variant-numeric:tabular-nums; }
-  .spin { display:inline-block; width:9px; height:9px; border-radius:50%; background:var(--accent);
-    animation:p 1s ease-in-out infinite; margin-right:7px; }
-  @keyframes p { 0%,100%{opacity:.25} 50%{opacity:1} }
-  .status { color:var(--muted); font-size:13px; }
-  h3 { font-size:13px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted);
-       margin:0 0 10px; font-weight:600; }
 
-  /* --- plan ------------------------------------------------------------ */
-  .sg { display:flex; gap:9px; align-items:baseline; padding:6px 0; font-size:14px;
-        border-top:1px solid var(--line); }
-  .sg:first-child { border-top:0; }
-  .sg .dot { width:15px; flex:none; text-align:center; font-size:12px; }
-  .sg .q { flex:1; text-align:start; }
-  .sg .why2 { color:var(--muted); font-size:12.5px; margin-top:2px; }
-  .sg.pending .q  { color:var(--muted); }
-  .sg.running .q  { font-weight:600; }
-  .sg.resolved .dot { color:var(--ok); }
-  .sg.partial  .dot { color:var(--warn); }
-  .sg.not_available .dot, .sg.unresolved .dot { color:var(--muted); }
-  .budget { margin-top:10px; font-size:12.5px; color:var(--muted);
-            font-variant-numeric:tabular-nums; }
-  .expanded { font-size:12.5px; color:var(--muted); padding:6px 0 0 24px; }
+  .gate {
+    margin:9px 0 0 38px; padding:10px 12px; font-size:12.5px;
+    background:var(--warn-bg); border-left:3px solid var(--warn);
+    border-radius:0 8px 8px 0;
+  }
+  .expanded { font-size:12px; color:var(--muted); padding:9px 0 0 38px; }
 
-  /* --- hops grouped by sub-goal ---------------------------------------- */
-  .sgroup { border-top:1px solid var(--line); padding-top:10px; margin-top:10px; }
-  .sgroup:first-child { border-top:0; margin-top:0; padding-top:0; }
-  .sgroup > .head { font-size:12.5px; color:var(--muted); margin-bottom:2px; text-align:start; }
+  /* --- answer ---------------------------------------------------------- */
+  .card.answer-card { border-inline-start:3px solid var(--maroon); }
+  .card.answer-card.none { border-inline-start-color:var(--muted); }
+  .answer { font-size:15.5px; text-align:start; }
+  .answer p  { margin:0 0 9px; }
+  .answer h4 { margin:16px 0 6px; font-size:11px; text-transform:uppercase;
+               letter-spacing:.09em; color:var(--maroon); font-weight:700; }
+  .answer h4:first-child { margin-top:0; }
+  .answer ul { margin:0 0 9px; padding-inline-start:20px; }
+  .answer li { margin:3px 0; }
+  .answer > *:last-child { margin-bottom:0; }
 
-  /* --- gate ------------------------------------------------------------- */
-  .gate { margin:8px 0 0 46px; padding:8px 10px; font-size:12.5px;
-          background:var(--warn-bg); border-left:3px solid var(--warn);
-          border-radius:0 6px 6px 0; }
-
-  /* --- answer ----------------------------------------------------------- */
-  .answer { white-space:pre-wrap; font-size:14.5px; text-align:start; }
-  .support { display:flex; align-items:center; gap:9px; margin-top:12px;
+  .support { display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+             margin-top:16px; padding-top:14px; border-top:1px solid var(--line-soft);
              font-size:12.5px; color:var(--muted); font-variant-numeric:tabular-nums; }
-  .bar { flex:1; max-width:190px; height:6px; border-radius:4px; background:var(--line);
-         overflow:hidden; direction:ltr; }
+  .bar { flex:1; min-width:80px; max-width:170px; height:6px; border-radius:4px;
+         background:var(--line); overflow:hidden; direction:ltr; }
   .bar > i { display:block; height:100%; background:var(--ok); }
   .bar.warn > i { background:var(--warn); }
   .bar.bad  > i { background:var(--bad); }
-  ul.gaps { margin:8px 0 0; padding-left:20px; font-size:13px; color:var(--muted); }
+  .caveat { margin-top:7px; font-size:12.5px; color:var(--muted); }
+  .caveat b { color:var(--ink); font-weight:600; }
 
-  /* --- answer body (rendered markdown) --------------------------------- */
-  .answer p  { margin:0 0 8px; }
-  .answer h4 { margin:14px 0 5px; font-size:13px; text-transform:uppercase;
-               letter-spacing:.05em; color:var(--muted); font-weight:600; }
-  .answer h4:first-child { margin-top:0; }
-  .answer ul { margin:0 0 8px; padding-left:20px; }
-  .answer li { margin:2px 0; }
-  .answer > *:last-child { margin-bottom:0; }
-
-  /* --- what grounding removed ------------------------------------------ */
   details.struck { margin-top:8px; font-size:12.5px; }
   details.struck > summary { cursor:pointer; color:var(--muted); }
   details.struck > summary:hover { color:var(--ink); }
-  details.struck ul { margin:8px 0 0; padding-left:18px; }
-  details.struck li { margin:6px 0; }
-  .struck-text { display:block; text-decoration:line-through; opacity:.75; }
-  .struck-why  { display:block; color:var(--muted); font-size:12px; }
+  details.struck ul { margin:9px 0 0; padding-inline-start:18px; }
+  details.struck li { margin:7px 0; }
+  .struck-text { display:block; text-decoration:line-through; opacity:.7; }
+  .struck-why  { display:block; color:var(--muted); font-size:11.5px; }
+
+  ul.sources, ul.gaps { margin:0; padding-inline-start:20px; font-size:13.5px; }
+  ul.sources { word-break:break-all; }
+  ul.sources a { color:var(--maroon); }
+  ul.gaps { color:var(--muted); }
+  .verdict-bad { border-inline-start:3px solid var(--bad); }
+  .verdict-bad h4 { margin:0 0 4px; font-size:15px; }
+
+  @media (max-width:640px) {
+    .wrap { padding:20px 16px 150px; }
+    /* The masthead keeps its own padding here: stripping it clipped the
+       strapline against the right edge. Only the composer needs narrowing. */
+    .top-inner { padding:16px; }
+    .top .tag { font-size:12px; }
+    .composer { padding:12px 12px 16px; }
+    .ask .bubble { max-width:88%; }
+    .hop { grid-template-columns:20px 1fr; gap:0 8px; }
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --maroon:#C4405F; --maroon-deep:#A82B48; --maroon-soft:#33161F;
+      --gold:#D9B84A; --gold-soft:#2C2616;
+      --bg:#141113; --panel:#1C181A; --ink:#EFE9EA; --muted:#9A9094;
+      --line:#2C2528; --line-soft:#241E21;
+      --ok:#5FC98D; --ok-soft:#16301F; --warn:#DBAE4E; --warn-bg:#2A2416; --bad:#F08A8A;
+      --nav:#272044; --body:#173026; --footer:#33201D;
+      --shadow:0 1px 2px rgba(0,0,0,.3), 0 6px 20px rgba(0,0,0,.25);
+    }
+    header.top { background:#3A0F1E; }
+    .composer { background:linear-gradient(to top, var(--bg) 62%, rgba(20,17,19,.92) 82%, rgba(20,17,19,0)); }
+    .ask .bubble { background:var(--maroon-deep); }
+  }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <h1>Banque Misr Research Assistant</h1>
-  <div class="sub">Navigates the live site from the homepage. Every step is the agent's own choice.</div>
 
-  <div class="panel">
-    <form id="form">
-      <input id="task" type="text" autocomplete="off" dir="auto"
-             placeholder="e.g. Find the annual fee of the classic credit card" required>
-      <button id="go" type="submit">Run</button>
-    </form>
-    <div id="interpreting" class="interpreting" hidden></div>
-    <div id="status" class="status" hidden></div>
+<header class="top">
+  <div class="top-inner">
+    <div class="mark">BM</div>
+    <div>
+      <h1>Banque Misr Research Assistant</h1>
+      <div class="tag">Navigates the live site from the homepage — every step is the agent's own choice.</div>
+    </div>
   </div>
+</header>
 
-  <div class="panel" id="planPanel" hidden>
-    <h3>Plan</h3>
-    <div id="plan"></div>
-    <div id="budget" class="budget"></div>
-  </div>
+<div class="wrap"><div id="thread"></div></div>
 
-  <div class="panel" id="hopsPanel" hidden>
-    <h3>Navigation</h3>
-    <div id="hops"></div>
-  </div>
-
-  <div id="final"></div>
+<div class="composer">
+  <form id="form">
+    <input id="task" type="text" autocomplete="off" dir="auto"
+           placeholder="Ask about a product, a fee, or a rate…" required>
+    <button id="go" class="send" type="submit">Ask</button>
+  </form>
+  <div id="status" class="status" hidden></div>
 </div>
 
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
 let sessionId = null, es = null, pollTimer = null;
-// Hops are numbered per sub-goal now (each walks live from the seed), so the
-// poll fallback's de-duplication has to be keyed by sub-goal too -- a single
-// counter would swallow every sub-goal's hop 0 after the first.
-let seenHops = {}, planState = { order: [], byId: {} }, currentSubGoal = null;
+
+// Per-turn state. A turn is one question and everything the agent did for it;
+// the thread holds several, so nothing here can be a single global.
+let turn = null;
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
@@ -170,78 +308,97 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
 // Everything is escaped first, so only the patterns below can produce markup —
 // model output is never inserted as HTML.
 function md(text) {
-  const blocks = esc(text || "").split(/\n{2,}/);
-  return blocks.map((block) => {
+  return esc(text || "").split(/\n{2,}/).map((block) => {
     const lines = block.split("\n").filter((l) => l.trim());
     if (!lines.length) return "";
-    const out = [];
-    let list = [];
-    const flush = () => {
-      if (list.length) { out.push(`<ul>${list.join("")}</ul>`); list = []; }
-    };
+    const out = []; let list = [];
+    const flush = () => { if (list.length) { out.push(`<ul>${list.join("")}</ul>`); list = []; } };
     for (const line of lines) {
       const heading = line.match(/^\s*(#{1,6})\s+(.*)$/);
-      const bold = line.match(/^\s*\*\*(.+?)\*\*\s*:?\s*$/);
-      const bullet = line.match(/^\s*[-*]\s+(.*)$/);
-      if (heading)      { flush(); out.push(`<h4>${inline(heading[2])}</h4>`); }
-      else if (bold)    { flush(); out.push(`<h4>${inline(bold[1])}</h4>`); }
-      else if (bullet)  { list.push(`<li>${inline(bullet[1])}</li>`); }
-      else              { flush(); out.push(`<p>${inline(line)}</p>`); }
+      const bold    = line.match(/^\s*\*\*(.+?)\*\*\s*:?\s*$/);
+      const bullet  = line.match(/^\s*[-*]\s+(.*)$/);
+      if (heading)     { flush(); out.push(`<h4>${inline(heading[2])}</h4>`); }
+      else if (bold)   { flush(); out.push(`<h4>${inline(bold[1])}</h4>`); }
+      else if (bullet) { list.push(`<li>${inline(bullet[1])}</li>`); }
+      else             { flush(); out.push(`<p>${inline(line)}</p>`); }
     }
     flush();
     return out.join("");
   }).join("");
 }
+const inline = (s) => s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
 
-function inline(s) {
-  return s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-          .replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, "<em>$1</em>");
-}
+const SG_MARK = { pending:"", running:"", resolved:"✓", partial:"~",
+                  not_available:"✕", unresolved:"✕", unreadable:"✕" };
+const SG_WORD = { pending:"queued", running:"navigating…", resolved:"answered",
+                  partial:"partly answered", not_available:"not found",
+                  unresolved:"not found", unreadable:"document unreadable" };
 
 // Every terminal status gets its own voice. "arrived" is deliberately not
 // styled or worded as success: nothing has verified the page's content, and
 // presenting it as an answer would be the single most misleading thing the UI
 // could do.
 const VERDICTS = {
-  resolved:      { cls:"v-ok",   title:"Answered",
-                   caveat:"A validator confirmed this page answers the request." },
-  arrived:       { cls:"v-warn", title:"Reached what looks like the destination",
-                   caveat:"Content not yet verified — the agent judged the route, not the page. No validator has checked that this page actually answers the request." },
-  no_candidates: { cls:"v-none", title:"Couldn't find it",
-                   caveat:"Nothing on the pages reached led toward this request. The site may not cover it." },
-  exhausted:     { cls:"v-none", title:"Couldn't find it",
+  arrived:       { title:"Reached what looks like the destination",
+                   caveat:"Content not yet verified — the agent judged the route, not the page." },
+  no_candidates: { title:"Couldn't find it",
+                   caveat:"Nothing on the pages reached led toward this request." },
+  exhausted:     { title:"Couldn't find it",
                    caveat:"The agent ran out of budget before reaching an answer." },
-  blocked:       { cls:"v-bad",  title:"The site blocked the request",
+  blocked:       { title:"The site blocked the request",
                    caveat:"An access-denied page was returned. The run stopped rather than risk a ban." },
-  error:         { cls:"v-bad",  title:"The run failed",  caveat:"" },
+  error:         { title:"The run failed", caveat:"" },
 };
 
 function setBusy(busy, note) {
   $("go").disabled = busy;
   $("status").hidden = !note;
-  $("status").innerHTML = busy && note ? `<span class="spin"></span>${esc(note)}` : esc(note || "");
+  $("status").innerHTML = busy && note
+    ? `<span class="spin"></span><span>${esc(note)}</span>` : esc(note || "");
 }
 
-function reset() {
-  $("hops").innerHTML = ""; $("hopsPanel").hidden = true;
-  $("plan").innerHTML = ""; $("planPanel").hidden = true; $("budget").textContent = "";
-  $("final").innerHTML = ""; $("interpreting").hidden = true;
-  seenHops = {}; planState = { order: [], byId: {} }; currentSubGoal = null;
-  gateShown.clear(); pendingGates = {};
-  if (es) { es.close(); es = null; }
-  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+/* --- one turn in the thread ------------------------------------------- */
+function newTurn(task) {
+  const el = document.createElement("div");
+  el.className = "turn";
+  el.innerHTML =
+    `<div class="ask"><div class="bubble" dir="auto">${esc(task)}</div></div>` +
+    `<div class="reply"><div class="avatar">BM</div><div class="reply-body">` +
+      `<div class="t-badge"></div>` +
+      `<div class="t-interpreting"></div>` +
+      `<div class="t-plan card" hidden><h3 class="section">Plan</h3>` +
+        `<div class="t-sgs"></div><div class="t-budget budget"></div></div>` +
+      `<details class="t-trail card trail" open><summary>How it got there</summary>` +
+        `<div class="t-hops"></div></details>` +
+      `<div class="t-final"></div>` +
+    `</div></div>`;
+  $("thread").appendChild(el);
+  turn = {
+    el,
+    badge: el.querySelector(".t-badge"),
+    interpreting: el.querySelector(".t-interpreting"),
+    planCard: el.querySelector(".t-plan"),
+    sgs: el.querySelector(".t-sgs"),
+    budget: el.querySelector(".t-budget"),
+    trail: el.querySelector(".t-trail"),
+    hops: el.querySelector(".t-hops"),
+    final: el.querySelector(".t-final"),
+    seenHops: {}, plan: { order: [], byId: {} },
+    gateShown: new Set(), pendingGates: {}, answered: false,
+  };
+  el.scrollIntoView({ behavior: "smooth", block: "start" });
+  return turn;
 }
 
 function showReplayBadge(d) {
   // A recording must never be passed off as a live run.
-  if (!d.replayed) return;
-  const note = document.createElement("div");
-  note.className = "interpreting";
-  note.innerHTML = "<b>Replay:</b> these events come from a saved run, not a live one.";
-  $("final").before(note);
+  if (!d.replayed || !turn) return;
+  turn.badge.innerHTML =
+    `<span class="replay-badge">Replay — a saved run, not a live one</span>`;
 }
 
 function showResolved(d) {
+  if (!turn) return;
   showReplayBadge(d);
   // Keyed on the observable fact that the text changed, not only on the
   // model's used_context self-report: a model can rewrite a follow-up
@@ -249,169 +406,161 @@ function showResolved(d) {
   // the one piece of visible evidence that conversation memory works.
   const rewritten = d.sub_goal && d.sub_goal !== d.task;
   if (!rewritten && !d.used_context) return;
-  $("interpreting").hidden = false;
-  $("interpreting").innerHTML = rewritten
-    ? `<b>Interpreting as:</b> <span dir="auto">${esc(d.sub_goal)}</span>` +
-      `<div class="caveat" dir="auto">${esc(d.reasoning)}</div>`
-    : `<b>Read in the context of this conversation.</b>` +
-      `<div class="caveat" dir="auto">${esc(d.reasoning)}</div>`;
+  turn.interpreting.innerHTML =
+    `<div class="interpreting">` +
+    (rewritten
+      ? `<b>Interpreting as:</b> <span dir="auto">${esc(d.sub_goal)}</span>`
+      : `<b>Read in the context of this conversation.</b>`) +
+    `<div class="caveat" dir="auto">${esc(d.reasoning)}</div></div>`;
 }
 
-// --- plan -----------------------------------------------------------------
-const SG_MARK = {
-  pending:"·", running:"▸", resolved:"✓", partial:"~",
-  not_available:"✕", unresolved:"✕", unreadable:"✕",
-};
-const SG_WORD = {
-  pending:"queued", running:"navigating…", resolved:"answered",
-  partial:"partly answered", not_available:"not found",
-  unresolved:"not found", unreadable:"document unreadable",
-};
-
+/* --- plan -------------------------------------------------------------- */
 function renderPlan() {
-  if (!planState.order.length) return;
-  $("planPanel").hidden = false;
-  $("plan").innerHTML = planState.order.map((id) => {
-    const sg = planState.byId[id];
-    const state = sg.status || "pending";
+  if (!turn || !turn.plan.order.length) return;
+  turn.planCard.hidden = false;
+  turn.sgs.innerHTML = turn.plan.order.map((id) => {
+    const sg = turn.plan.byId[id], state = sg.status || "pending";
     return `<div class="sg ${esc(state)}">` +
-      `<span class="dot">${SG_MARK[state] || "·"}</span>` +
+      `<span class="dot">${SG_MARK[state] || ""}</span>` +
       `<span class="q"><span dir="auto">${esc(sg.question)}</span>` +
-      `<div class="why2" dir="auto">${esc(sg.reason || SG_WORD[state] || "")}</div></span>` +
-    `</div>`;
+      `<div class="why2" dir="auto">${esc(sg.reason || SG_WORD[state] || "")}</div></span></div>`;
   }).join("");
 }
 
 function showPlan(d) {
-  planState = { order: [], byId: {} };
+  if (!turn) return;
+  turn.plan = { order: [], byId: {} };
   (d.sub_goals || []).forEach((sg) => {
-    planState.order.push(sg.id);
-    planState.byId[sg.id] = { question: sg.question, status: sg.status || "pending", reason: "" };
+    turn.plan.order.push(sg.id);
+    turn.plan.byId[sg.id] = { question: sg.question, status: sg.status || "pending", reason: "" };
   });
-  renderPlan();
-  showBudget(d);
+  renderPlan(); showBudget(d);
 }
 
 function showBudget(d) {
-  if (d.pages_max === undefined || d.pages_max === null) return;
-  $("budget").textContent =
-    `budget · ${d.pages_used}/${d.pages_max} pages · ` +
-    `${d.llm_calls_used}/${d.llm_calls_max} model calls`;
+  if (!turn || d.pages_max === undefined || d.pages_max === null) return;
+  turn.budget.textContent =
+    `${d.pages_used}/${d.pages_max} pages · ${d.llm_calls_used}/${d.llm_calls_max} model calls`;
 }
 
 function subGoalStarted(d) {
-  currentSubGoal = d.sub_goal_id;
-  if (!planState.byId[d.sub_goal_id]) {
-    planState.order.push(d.sub_goal_id);
-    planState.byId[d.sub_goal_id] = { question: d.question, status: "pending", reason: "" };
+  if (!turn) return;
+  if (!turn.plan.byId[d.sub_goal_id]) {
+    turn.plan.order.push(d.sub_goal_id);
+    turn.plan.byId[d.sub_goal_id] = { question: d.question, status: "pending", reason: "" };
   }
-  planState.byId[d.sub_goal_id].status = "running";
-  planState.byId[d.sub_goal_id].reason = "";
+  Object.assign(turn.plan.byId[d.sub_goal_id], { status: "running", reason: "" });
   renderPlan();
 }
 
 function subGoalFinished(d) {
-  const sg = planState.byId[d.sub_goal_id] ||
-    (planState.order.push(d.sub_goal_id), planState.byId[d.sub_goal_id] = { question: d.question });
-  sg.question = d.question;
-  sg.status = d.status;
-  sg.reason = d.reason;
-  renderPlan();
-  showBudget(d);
+  if (!turn) return;
+  if (!turn.plan.byId[d.sub_goal_id]) {
+    turn.plan.order.push(d.sub_goal_id);
+    turn.plan.byId[d.sub_goal_id] = {};
+  }
+  Object.assign(turn.plan.byId[d.sub_goal_id],
+                { question: d.question, status: d.status, reason: d.reason });
+  renderPlan(); showBudget(d);
 }
 
 function planExpanded(d) {
+  if (!turn) return;
   (d.added || []).forEach((sg) => {
-    if (planState.byId[sg.id]) return;
-    planState.order.push(sg.id);
-    planState.byId[sg.id] = { question: sg.question, status: "pending", reason: "added from what was found" };
+    if (turn.plan.byId[sg.id]) return;
+    turn.plan.order.push(sg.id);
+    turn.plan.byId[sg.id] = { question: sg.question, status: "pending",
+                              reason: "added from what was found" };
   });
   renderPlan();
   const note = document.createElement("div");
   note.className = "expanded";
   note.textContent = `plan expanded: +${(d.added || []).length} sub-goal(s) from what the page listed`;
-  $("hops").appendChild(note);
+  turn.hops.appendChild(note);
 }
 
-// --- gate -----------------------------------------------------------------
+/* --- gate -------------------------------------------------------------- */
 // Rendered rather than only logged: the validator said stop and the run kept
 // going, which is a decision the screen has to own up to.
-const gateShown = new Set();
-let pendingGates = {};
 function showGate(d) {
-  if (d.accepted) return;
-  const key = `${d.sub_goal_id}|${d.url}`;   // the poll fallback resends
-  if (gateShown.has(key)) return;
-  gateShown.add(key);
-  $("hopsPanel").hidden = false;
+  if (!turn || d.accepted) return;
+  const key = `${d.sub_goal_id}|${d.url}`;
+  if (turn.gateShown.has(key)) return;
+  turn.gateShown.add(key);
   const el = document.createElement("div");
   el.className = "gate";
   el.innerHTML =
-    `<b>Kept looking.</b> The validator accepted this page, but its evidence ` +
-    `also appears on ${d.pages_compared} other page(s) fetched in this run, so it is ` +
-    `site navigation rather than an answer.` +
+    `<b>Kept looking.</b> The validator accepted this page, but its evidence also ` +
+    `appears on ${d.pages_compared} other page(s) fetched in this run, so it is site ` +
+    `navigation rather than an answer.` +
     `<div class="caveat" dir="auto">validator said: ${esc(d.validator_reason)}</div>`;
-
-  // Anchored to the hop it is about. The gate runs during validation, which
-  // happens before the step is logged, so on a live stream the notice arrives
-  // *before* the hop it belongs to and there is nothing to attach it to yet.
-  // Held until addHop renders that page; appending to the end instead would
-  // stack every notice under whichever hop rendered last, reading as though
-  // one page had been rejected twice.
-  const hop = $("hops").querySelector(`.hop[data-url="${CSS.escape(d.url)}"]`);
+  // The gate runs during validation, before the step is logged, so on a live
+  // stream the notice arrives before the hop it belongs to. Held until then.
+  const hop = turn.hops.querySelector(`.hop[data-url="${CSS.escape(d.url)}"]`);
   if (hop) hop.insertAdjacentElement("afterend", el);
-  else (pendingGates[d.url] ||= []).push(el);
+  else (turn.pendingGates[d.url] ||= []).push(el);
 }
 
 function flushGates(url) {
-  const waiting = pendingGates[url];
+  if (!turn) return;
+  const waiting = turn.pendingGates[url];
   if (!waiting) return;
-  delete pendingGates[url];
-  const hop = $("hops").querySelector(`.hop[data-url="${CSS.escape(url)}"]`);
+  delete turn.pendingGates[url];
+  const hop = turn.hops.querySelector(`.hop[data-url="${CSS.escape(url)}"]`);
   waiting.forEach((el) => (hop ? hop.insertAdjacentElement("afterend", el)
-                               : $("hops").appendChild(el)));
+                               : turn.hops.appendChild(el)));
 }
 
-// --- hops -----------------------------------------------------------------
+/* --- hops -------------------------------------------------------------- */
 function hopGroup(d) {
-  const key = d.sub_goal_id || "_";
-  const id = "sgroup-" + key;
-  let group = document.getElementById(id);
+  const id = "sg-" + (d.sub_goal_id || "_");
+  let group = turn.el.querySelector(`[data-group="${id}"]`);
   if (!group) {
     group = document.createElement("div");
     group.className = "sgroup";
-    group.id = id;
-    if (planState.order.length > 1) {
+    group.dataset.group = id;
+    if (turn.plan.order.length > 1) {
       group.innerHTML = `<div class="head" dir="auto">for: ${esc(d.sub_goal || "")}</div>`;
     }
-    $("hops").appendChild(group);
+    turn.hops.appendChild(group);
   }
   return group;
 }
 
 function addHop(d) {
+  if (!turn) return;
   const key = d.sub_goal_id || "_";
-  if (d.hop < (seenHops[key] || 0)) return;   // poll fallback may resend
-  seenHops[key] = d.hop + 1;
-  $("hopsPanel").hidden = false;
+  if (d.hop < (turn.seenHops[key] || 0)) return;   // poll fallback may resend
+  turn.seenHops[key] = d.hop + 1;
   const badge = d.source ? `<span class="badge ${esc(d.source)}">${esc(d.source)}</span>` : "";
   const label = d.hop === 0 ? "Starting page" : esc(d.label || "(unlabelled link)");
+  const conf = d.hop > 0
+    ? `<span class="conf">confidence <b><i style="width:${Math.round(Number(d.confidence) * 100)}%"></i></b>` +
+      `${Number(d.confidence).toFixed(2)}</span>` : "";
   const el = document.createElement("div");
   el.className = "hop";
   el.dataset.url = d.url;                    // so a gate notice can find its page
   el.innerHTML =
-    `<div class="hopline"><span class="num">hop ${d.hop}</span>` +
-    `<span class="label" dir="auto">${label}</span>${badge}</div>` +
-    `<div class="why" dir="auto">${esc(d.reasoning)}</div>` +
-    `<div class="meta">${esc(d.url)} · ${d.status} · ${d.links_found} links` +
-    (d.hop > 0 ? ` · ${d.candidates_offered}/${d.candidates_available} candidates` +
-                 ` · confidence ${Number(d.confidence).toFixed(2)}` : "") + `</div>`;
+    `<div class="rail"><i></i></div><div>` +
+      `<div class="hopline"><span class="num">hop ${d.hop}</span>` +
+      `<span class="label" dir="auto">${label}</span>${badge}</div>` +
+      `<div class="why" dir="auto">${esc(d.reasoning)}</div>` +
+      `<div class="meta"><span>${esc(d.url)}</span><span>${d.status}</span>` +
+      `<span>${d.links_found} links</span>` +
+      (d.hop > 0 ? `<span>${d.candidates_offered}/${d.candidates_available} candidates</span>${conf}` : "") +
+    `</div></div>`;
   hopGroup(d).appendChild(el);
   flushGates(d.url);
 }
 
-// --- the answer -----------------------------------------------------------
+/* --- the answer -------------------------------------------------------- */
 function showAnswer(d) {
+  if (!turn) return;
+  turn.answered = true;
+  // Progressive disclosure: the trail is the good part of the demo while the
+  // run is going, and secondary once there is an answer to read.
+  turn.trail.open = false;
+
   const gaps = (d.not_found || []).map((g) => `<li dir="auto">${esc(g)}</li>`).join("");
   const sources = (d.source_urls || []).map(
     (u) => `<li><a href="${esc(u)}" target="_blank" rel="noopener">${esc(u)}</a></li>`).join("");
@@ -424,102 +573,85 @@ function showAnswer(d) {
   // replaced by a plain statement rather than a reassuring green line.
   const composed = d.answer_source === "composed";
   const g = (d.composition && d.composition.grounding) || null;
-
   let support;
   if (!d.claims_total) {
-    support = `<div class="support">No verifiable claims were extracted, ` +
-              `so there is nothing to attribute.</div>`;
+    support = `<div class="support">No verifiable claims were extracted, so there is ` +
+              `nothing to attribute.</div>`;
   } else {
     const pct = Math.round((d.support_rate || 0) * 100);
     const cls = pct === 100 ? "" : (pct >= 50 ? "warn" : "bad");
     support =
-      `<div class="support">` +
-      `<span>Facts whose value was found on the page they cite:</span>` +
+      `<div class="support"><span>Facts whose value was found on the page they cite</span>` +
       `<span class="bar ${cls}"><i style="width:${pct}%"></i></span>` +
       `<span>${d.claims_supported}/${d.claims_total} (${pct}%)</span></div>` +
-      (pct < 100 ? `<div class="caveat">Unsupported statements were removed from the ` +
-                   `answer above rather than shown with sources beneath them.</div>` : "");
+      (pct < 100 ? `<div class="caveat">Unsupported statements were removed from the answer ` +
+                   `above rather than shown with sources beneath them.</div>` : "");
   }
 
   // How the wording was produced. A template answer is assembled from the
   // extracted values and cannot say anything they do not; a composed one was
   // written by the model and had every sentence checked against those values.
-  // Saying which is the difference between "verified" meaning two things.
   let provenance = "";
   if (composed && g) {
     // The reasons used to be dumped inline, repeated verbatim, one per struck
-    // sentence — unreadable, and it buried the answer. The count is the
-    // headline; the detail is one click away for anyone who wants it.
+    // sentence — unreadable, and it buried the answer. Count first, detail
+    // one click away.
     let detail = "";
     if (g.sentences_struck) {
       const rows = (g.struck || []).map((s) =>
         `<li><span class="struck-text" dir="auto">${esc(s.sentence)}</span>` +
         `<span class="struck-why">${esc(s.reason.replace(/\.$/, ""))}</span></li>`).join("");
-      detail =
-        `<details class="struck"><summary>${g.sentences_struck} of ${g.sentences_total} ` +
+      detail = `<details class="struck"><summary>${g.sentences_struck} of ${g.sentences_total} ` +
         `sentence${g.sentences_total === 1 ? "" : "s"} removed — show what was cut</summary>` +
         `<ul>${rows}</ul></details>`;
     }
-    provenance =
-      `<div class="caveat"><b>Written by the model</b> from ` +
+    provenance = `<div class="caveat"><b>Written by the model</b> from ` +
       `${d.composition.claims_offered} verified facts; every figure checked against them` +
       (g.sentences_struck ? "." : `, all ${g.sentences_total} kept.`) + `</div>` + detail;
   } else if (d.composition && d.composition.attempted && !d.composition.used) {
-    provenance = `<div class="caveat"><b>Showing the extracted values.</b> ` +
-      `A written answer was attempted and discarded: ${esc(d.composition.reason)}.</div>`;
+    provenance = `<div class="caveat"><b>Showing the extracted values.</b> A written answer ` +
+      `was attempted and discarded: ${esc(d.composition.reason)}.</div>`;
   } else if (d.claims_total) {
     provenance = `<div class="caveat"><b>Showing the extracted values</b> exactly as they ` +
       `appear on the page — no wording was generated.</div>`;
   }
 
-  $("final").innerHTML =
-    `<div class="panel verdict ${d.resolved_count ? "v-ok" : "v-none"}">` +
-      `<h2>${d.resolved_count ? "Answer" : "No answer found"}</h2>` +
+  turn.final.innerHTML =
+    `<div class="card answer-card${d.resolved_count ? "" : " none"}">` +
       `<div class="answer" dir="auto">${md(d.answer || "")}</div>` +
       support + provenance +
-      (d.budget_exhausted ? `<div class="caveat">Stopped early: ${esc(d.budget_exhausted)}. ` +
-        `Sub-goals left unvisited are listed below.</div>` : "") +
-      (d.gate_rejections ? `<div class="caveat">${d.gate_rejections} page(s) were accepted by the ` +
-        `validator and rejected here as site navigation.</div>` : "") +
-      `<div class="timing">${d.resolved_count}/${d.sub_goals_total} sub-goals answered</div>` +
+      (d.budget_exhausted ? `<div class="caveat">Stopped early: ${esc(d.budget_exhausted)}.</div>` : "") +
+      (d.gate_rejections ? `<div class="caveat">${d.gate_rejections} page(s) were accepted by ` +
+        `the validator and rejected here as site navigation.</div>` : "") +
     `</div>` +
-    (gaps ? `<div class="panel"><h3>Not found</h3><ul class="gaps">${gaps}</ul></div>` : "") +
-    (sources ? `<div class="panel"><h3>Sources cited</h3><ul class="sources">${sources}</ul></div>` : "");
+    (sources ? `<div class="card tight"><h3 class="section">Sources cited</h3>` +
+               `<ul class="sources">${sources}</ul></div>` : "") +
+    (gaps ? `<div class="card tight"><h3 class="section">Not found</h3>` +
+            `<ul class="gaps">${gaps}</ul></div>` : "");
   setBusy(false, "");
 }
 
 function showDone(d) {
   // The loop's answer is the result whenever there is one; the older
   // page-reached verdict is kept for a bare navigation with no plan behind it
-  // (replayed recordings from before the intelligence layer landed, and the
-  // navigator-only tests).
+  // (recordings from before the intelligence layer landed, navigator tests).
   if (d.answer) { showAnswer(d.answer); return; }
+  if (!turn || turn.answered) return;
   const v = VERDICTS[d.status] || VERDICTS.error;
-  const t = d.timing || {};
-  const secs = (k) => Number(t[k] || 0).toFixed(1);
-  const sources = (d.sources || []).map(
-    (u) => `<li><a href="${esc(u)}" target="_blank" rel="noopener">${esc(u)}</a></li>`).join("");
-  $("final").innerHTML =
-    `<div class="panel verdict ${v.cls}">` +
-      `<h2>${esc(v.title)}</h2>` +
-      `<p dir="auto">${esc(d.final_reasoning || "")}</p>` +
-      (v.caveat ? `<div class="caveat">${esc(v.caveat)}</div>` : "") +
-      (d.page_url ? `<div class="caveat">Page reached: <a href="${esc(d.page_url)}" ` +
-                    `target="_blank" rel="noopener">${esc(d.page_url)}</a></div>` : "") +
-      `<div class="timing">${d.hops_used} hops · ${d.pages_fetched} pages · ` +
-        `total ${secs("total_s")}s (model ${secs("llm_s")}s · ` +
-        `requests ${secs("page_request_s")}s · pdf ${secs("pdf_text_s")}s · ` +
-        `pacing ${secs("page_rate_limit_wait_s")}s)</div>` +
-    `</div>` +
-    (sources ? `<div class="panel"><h3>Sources visited</h3><ul class="sources">${sources}</ul></div>` : "");
+  turn.trail.open = false;
+  turn.final.innerHTML =
+    `<div class="card verdict-bad"><h4>${esc(v.title)}</h4>` +
+    `<p dir="auto">${esc(d.final_reasoning || "")}</p>` +
+    (v.caveat ? `<div class="caveat">${esc(v.caveat)}</div>` : "") + `</div>`;
   setBusy(false, "");
 }
 
 function showError(d) {
   const v = VERDICTS[d.kind === "blocked" ? "blocked" : "error"];
-  $("final").innerHTML =
-    `<div class="panel verdict ${v.cls}"><h2>${esc(v.title)}</h2>` +
-    `<p>${esc(d.message)}</p></div>`;
+  const html = `<div class="card verdict-bad"><h4>${esc(v.title)}</h4>` +
+               `<p>${esc(d.message)}</p></div>`;
+  if (turn) { turn.trail.open = false; turn.final.innerHTML = html; }
+  else { $("thread").insertAdjacentHTML("beforeend", html); }
   setBusy(false, "");
 }
 
@@ -530,7 +662,7 @@ function finish() {
 
 // Poll fallback: used when EventSource never connects or drops mid-run. The
 // status endpoint accumulates everything the stream emitted, so replaying it
-// is safe -- addHop ignores hops already on screen.
+// is safe — addHop and showGate ignore what is already on screen.
 function startPolling(taskId) {
   if (pollTimer) return;
   setBusy(true, "Live updates unavailable — polling for progress…");
@@ -545,10 +677,10 @@ function startPolling(taskId) {
     const s = await r.json();
     if (s.sub_goal) showResolved({ ...s, task: s.task });
     if (s.plan) showPlan(s.plan);
-    if (s.answer) showAnswer(s.answer);
     (s.sub_goals || []).forEach(subGoalFinished);
     (s.gate_events || []).forEach(showGate);
     (s.hops || []).forEach(addHop);
+    if (s.answer) showAnswer(s.answer);
     if (s.state === "done" && s.result) { finish(); showDone(s.result); }
     if (s.state === "error" && s.error) { finish(); showError(s.error); }
   }, 1000);
@@ -557,24 +689,21 @@ function startPolling(taskId) {
 function stream(taskId) {
   let sawAny = false;
   es = new EventSource(`/api/tasks/${taskId}/stream`);
-  es.addEventListener("resolved", (e) => { sawAny = true; showResolved(JSON.parse(e.data)); });
-  es.addEventListener("hop",      (e) => { sawAny = true; addHop(JSON.parse(e.data)); });
-  es.addEventListener("plan",             (e) => { sawAny = true; showPlan(JSON.parse(e.data)); });
-  es.addEventListener("sub_goal_started", (e) => { sawAny = true; subGoalStarted(JSON.parse(e.data)); });
-  es.addEventListener("sub_goal_finished",(e) => { sawAny = true; subGoalFinished(JSON.parse(e.data)); });
-  es.addEventListener("plan_expanded",    (e) => { sawAny = true; planExpanded(JSON.parse(e.data)); });
-  es.addEventListener("gate",             (e) => { sawAny = true; showGate(JSON.parse(e.data)); });
-  es.addEventListener("budget",           (e) => { showBudget(JSON.parse(e.data)); });
-  es.addEventListener("synthesis_started",(e) => {
-    setBusy(true, "Checking every claim against the pages this run actually fetched…");
-  });
-  es.addEventListener("answer",           (e) => { showAnswer(JSON.parse(e.data)); });
-  es.addEventListener("queued",   (e) => {
-    sawAny = true;
-    const p = JSON.parse(e.data).position;
-    setBusy(true, `Queued behind ${p} run${p === 1 ? "" : "s"} — only a couple run at once, to stay polite to the site.`);
-  });
-  es.addEventListener("done",  (e) => { finish(); showDone(JSON.parse(e.data)); });
+  const on = (name, fn) => es.addEventListener(name, (e) => { sawAny = true; fn(JSON.parse(e.data)); });
+  on("resolved", showResolved);
+  on("hop", addHop);
+  on("plan", showPlan);
+  on("sub_goal_started", subGoalStarted);
+  on("sub_goal_finished", subGoalFinished);
+  on("plan_expanded", planExpanded);
+  on("gate", showGate);
+  on("budget", showBudget);
+  on("answer", showAnswer);
+  on("synthesis_started", () =>
+    setBusy(true, "Checking every claim against the pages this run actually fetched…"));
+  on("queued", (d) => setBusy(true,
+    `Queued behind ${d.position} run${d.position === 1 ? "" : "s"} — only a couple run at once, to stay polite to the site.`));
+  es.addEventListener("done", (e) => { finish(); showDone(JSON.parse(e.data)); });
   es.addEventListener("error_event", (e) => { finish(); showError(JSON.parse(e.data)); });
   es.addEventListener("error", (e) => {
     // Fires both for a server-sent "error" event and for a transport drop.
@@ -593,7 +722,8 @@ async function ensureSession() {
 }
 
 async function submit(task) {
-  reset();
+  finish();
+  newTurn(task);
   setBusy(true, "Starting from the homepage…");
   const sid = await ensureSession();
   let r = await fetch("/api/tasks", {

@@ -304,6 +304,8 @@ class TaskRegistry:
                 record.gate_events.append(GateEvent(**data))
             elif name == "answer_verified":
                 record.verification = AnswerVerifiedEvent(**data)
+            elif name == "answer":
+                record.answer = AnswerEvent(**data)
             elif name == "done":
                 record.result = DoneEvent(**data)
                 record.state = "done"

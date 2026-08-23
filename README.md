@@ -907,6 +907,26 @@ Claims are checked against exactly the pages the run fetched. Nothing enters
 the loop from a fixture, a cache or an index, so a claim citing a page the run
 never visited cannot survive.
 
+## Running the demo without spending quota
+
+Styling and rehearsal both cost model calls, and the free tier allows about
+twenty a day while a task costs three or four. Record one good run, then serve
+it back:
+
+```bash
+# record: BM_RECORD_DIR saves every run's event stream as JSON
+BM_RECORD_DIR=recordings python3 -m uvicorn api.app:app
+
+# replay: BM_REPLAY_DIR serves the saved run through the same SSE channel
+BM_REPLAY_DIR=recordings python3 -m uvicorn api.app:app
+```
+
+A replayed run is announced as one — the stream carries `replayed: true` and
+the interface shows a badge. Presenting a recording as live would be the kind
+of demo shortcut this project has avoided everywhere else.
+
+No `PYTHONPATH` is needed for either: see `_bootstrap.py`.
+
 ## Known gaps
 
 - The paths in `fixtures/fixture_urls.txt` were traced by hand and may be
@@ -934,14 +954,29 @@ never visited cannot survive.
   the cases that produced *wrong verdicts*, but the structure remains: delete
   the word "card" from `src/person_b/` and it stops working. This half holds
   the opposite constraint. Listed in full at the end of `PATCHES.md`.
-- **Arabic is unsupported in the intelligence layer.** Their extraction mangles
-  Arabic text and every Arabic task validates as `unresolved`. Navigation,
-  language detection and the UI all handle Arabic correctly, so an Arabic run
-  navigates properly and then fails to resolve — visibly, in the plan panel,
-  rather than returning a wrong answer. Person B owns this; nothing here
-  compensates for it.
+- **Arabic is not supported end to end, and this is a known limitation.**
+  Everything on this side handles it: the task's script is detected, the Arabic
+  seed is fetched, Arabic links are ranked and followed, the reasoning is
+  written in Arabic and the interface renders it right-to-left per string.
+
+  It then fails inside the vendored intelligence layer. That layer's
+  extraction, planning and validation are keyed on English words throughout
+  (see the topic-coupling note above and the end of `PATCHES.md`), so an Arabic
+  page yields no entities, no claims and a verdict of `unresolved`.
+
+  The visible behaviour is therefore: **an Arabic run navigates correctly,
+  resolves nothing, and reports "not found".** That is an honest failure, not a
+  wrong answer — and the composition gate means no answer is generated either,
+  because with no verified claims the model is never asked to write. Fixing it
+  means de-coupling their layer from English keywords, which is theirs to do
+  and is not a patch this side can make. Do not demo Arabic as a success path.
 - The acceptance gate abstains on the first pages of a run, when there is not
   yet enough to compare against (see above). It is a backstop, not a first line.
+- The frontend renders a small subset of markdown (bold, headings, bullets)
+  because the composer is asked for grouped output. Everything is escaped
+  before any pattern is applied, so model output is never inserted as HTML —
+  but it is a hand-rolled renderer, not a library, and it handles only what the
+  composer is asked to produce.
 - Answer composition can be turned off with `COMPOSE_ANSWER = False`, which
   falls back to the template wording. Worth knowing before a demo: with it off
   the answer is accurate and reads like a lookup table.
