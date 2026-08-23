@@ -331,3 +331,25 @@ EXTRACTION_MAX_PAGE_CHARS = 12000
 # Facts to accept from one page. A page has many numbers on it; this is a
 # ceiling on the answer's size, not a target.
 EXTRACTION_MAX_FACTS = 25
+
+
+# --- Tiered answers --------------------------------------------------------
+# The spec asks the agent to "analyze, compare, or summarize ... when
+# required". Analysis means derived statements -- "issuance and renewal are
+# both EGP 250, so there is no increase after year one" is on no page, though
+# both figures are. Composed prose alone produced only literal restatements,
+# because the prompt forbade anything else.
+#
+# Three kinds of sentence, each with a different warranty:
+#   fact      restated from a page
+#   analysis  derived by comparison, aggregation or summary
+#   judgment  a recommendation, only where the task asks to be advised
+#
+# Costs nothing extra: it is the shape the existing composition call's reply
+# takes, not another call. agent/grounding.py runs on every sentence
+# unchanged -- an invented figure dies in tier 2 exactly as it does in tier 1.
+# Only the inference is the agent's, never the figures.
+#
+# Set False to go back to untiered prose (which itself falls back to the
+# template answer).
+ANSWER_TIERS = True

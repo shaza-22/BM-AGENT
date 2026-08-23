@@ -46,6 +46,9 @@ from typing import Any
 
 from agent import config
 from agent.grounding import GroundingReport, check_grounding
+# The same defensive parse the planner and link selector use: models wrap JSON
+# in prose, and one place to fix that is better than three.
+from agent.planner import _extract_json
 from agent.llm import LLMClient, LLMError
 
 logger = logging.getLogger(__name__)
@@ -56,6 +59,79 @@ SYSTEM = (
     "assistant actually fetched, and nothing else is true as far as you are "
     "concerned. Every figure you write must be copied from those facts."
 )
+
+# One line both composition prompts carry, so anything that needs to recognise
+# "this is the composing call" -- a test double, a recording harness -- has a
+# single stable string to match rather than one per prompt variant.
+COMPOSING_MARKER = "Write the answer to the user's question"
+
+TIERS = ("fact", "analysis", "judgment")
+
+ANSWER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "sentences": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "tier": {"type": "string", "enum": list(TIERS)},
+                    "text": {"type": "string"},
+                },
+                "required": ["tier", "text"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["sentences"],
+    "additionalProperties": False,
+}
+
+TIERED_PROMPT = """\
+The user asked:
+{task}
+
+These are the facts this run verified. Each is a label, its value, and the page it came from.
+
+{facts}
+
+Write the answer to the user's question from these facts, as a list of
+sentences, each tagged with what kind of statement it is.
+
+**fact** — restated from a page. Copy every figure exactly as written above.
+  Group related facts under short bold headings and put one fact per line as
+  "Label — value". Open with a short line saying what follows and close with one
+  saying where the figures came from; tag those as fact too.
+
+**analysis** — something you worked out *from* the facts: a comparison, a total,
+  a pattern, a summary. This is the part that makes the answer research rather
+  than a list, so include it whenever the facts support it. Every figure and
+  label you use must still come from the list above; only the inference is
+  yours. For example: two fees being equal means no increase after the first
+  year — that conclusion is not written on any page, but both figures are.
+
+{judgment_rule}
+
+Rules that hold for every tier:
+- Never write a figure that is not in the list above, copied exactly, including
+  the currency and any % sign.
+- Never pair a label with a different fact's value.
+- Do not add background, history, or anything not derived from the list.
+- If the facts do not answer the question, say which part is missing.
+- Write in {language_name}.
+- Keep it short enough to read at a glance.
+"""
+
+JUDGMENT_ALLOWED = """\
+**judgment** — a recommendation or a verdict, where the question asks for one.
+  The premises must be facts from the list; the opinion is yours, and you should
+  say plainly that it is a suggestion. Name the trade-off, not only the winner.
+"""
+
+JUDGMENT_WITHHELD = """\
+Do not offer a recommendation, a verdict, or an opinion about which option is
+better. The user asked what is true, not what to choose.
+"""
 
 PROMPT = """\
 The user asked:
@@ -99,6 +175,12 @@ class Composition:
     reason: str = ""
     report: GroundingReport | None = None
     claims_offered: int = 0
+    # Sentences by tier, each already through grounding. Kept separate from
+    # ``text`` because the interface has to show which statements the bank's
+    # website is responsible for and which the agent is -- a derived conclusion
+    # must never wear a verified fact's badge.
+    tiers: dict[str, list[str]] = field(default_factory=dict)
+    tiered: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -107,6 +189,8 @@ class Composition:
             "reason": self.reason,
             "claims_offered": self.claims_offered,
             "grounding": self.report.to_dict() if self.report else None,
+            "tiered": self.tiered,
+            "tiers": {tier: list(lines) for tier, lines in self.tiers.items()},
         }
 
 
@@ -137,6 +221,138 @@ def _facts_block(claims: list[dict], limit: int) -> str:
         else:
             lines.append(f"{index}. {claim.get('statement', '')}   [{source}]")
     return "\n".join(lines)
+
+
+def _wants_judgment(task: str, task_type: str | None) -> bool:
+    """Is this a question that asks to be advised, rather than told?
+
+    Driven by the plan's own task type -- the same classification the expansion
+    gate uses -- so there is one notion of "this asks for a recommendation" in
+    the system rather than two that can disagree.
+    """
+    return (task_type or "").lower() in ("recommendation", "comparison")
+
+
+def _parse_tiers(raw: str) -> list[tuple[str, str]]:
+    """(tier, text) pairs from a tiered reply, dropping anything unusable."""
+    parsed = _extract_json(raw)
+    items = parsed.get("sentences")
+    if not isinstance(items, list):
+        raise ValueError("reply has no sentences list")
+    out: list[tuple[str, str]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "").strip()
+        tier = str(item.get("tier") or "fact").strip().lower()
+        if not text:
+            continue
+        # An unrecognised tier is treated as the strictest one rather than
+        # dropped: the sentence still has to pass grounding, and calling it a
+        # fact means the interface will not present it as the agent's opinion.
+        out.append((tier if tier in TIERS else "fact", text))
+    if not out:
+        raise ValueError("no usable sentences in the reply")
+    return out
+
+
+def compose_tiered(
+    task: str,
+    claims: list[dict],
+    llm: LLMClient,
+    *,
+    language: str | None = None,
+    task_type: str | None = None,
+    max_facts: int = config.COMPOSE_MAX_FACTS,
+) -> Composition:
+    """Write the answer as tagged sentences: fact, analysis, and maybe judgment.
+
+    One model call, the same one composition already spent -- the tiers are a
+    shape the reply takes, not extra work. Grounding then runs per sentence,
+    **unchanged**: every figure must be quoted, every sentence anchored, and a
+    label must keep its own value. Analysis and judgment are subject to exactly
+    those rules; what is theirs is the inference between the figures, never the
+    figures.
+    """
+    if not claims:
+        return Composition(
+            attempted=False,
+            reason="no verified claims; refusing to generate without evidence to ground on",
+        )
+
+    prompt = TIERED_PROMPT.format(
+        task=task,
+        facts=_facts_block(claims, max_facts),
+        judgment_rule=(JUDGMENT_ALLOWED if _wants_judgment(task, task_type)
+                       else JUDGMENT_WITHHELD),
+        language_name=LANGUAGE_NAMES.get(language or "en", "English"),
+    )
+
+    composition = Composition(attempted=True, tiered=True,
+                              claims_offered=min(len(claims), max_facts))
+    try:
+        raw = llm.complete(prompt, system=SYSTEM, schema=ANSWER_SCHEMA)
+    except LLMError as exc:
+        logger.warning("tiered composition failed, keeping the template answer: %s", exc)
+        composition.reason = f"model unavailable: {exc}"
+        return composition
+
+    try:
+        sentences = _parse_tiers(raw)
+    except Exception as exc:
+        logger.warning("tiered composition unparseable, keeping the template answer: %s", exc)
+        composition.reason = f"unparseable reply: {exc}"
+        return composition
+
+    # Whether an opinion is wanted is decided here, not by the prompt. The
+    # prompt asks; a guard clause guarantees. A model handed a fee question
+    # will sometimes volunteer a recommendation anyway, and an unasked-for
+    # opinion from a bank's assistant is the one kind of sentence worth
+    # dropping outright rather than relabelling -- calling it analysis would
+    # only hide it behind the wrong badge.
+    allow_judgment = _wants_judgment(task, task_type)
+
+    kept: dict[str, list[str]] = {tier: [] for tier in TIERS}
+    struck: list[tuple[str, str]] = []
+    dropped_judgments = 0
+    total = 0
+    for tier, text in sentences:
+        total += 1
+        if tier == "judgment" and not allow_judgment:
+            dropped_judgments += 1
+            continue
+        report = check_grounding(text, claims[:max_facts])
+        if report.text.strip():
+            kept[tier].append(report.text.strip())
+        struck.extend(report.struck)
+
+    composition.tiers = {tier: lines for tier, lines in kept.items() if lines}
+    composition.report = GroundingReport(
+        text="", kept=[line for lines in kept.values() for line in lines], struck=struck,
+    )
+
+    if dropped_judgments:
+        logger.info(
+            "dropped %d unasked-for recommendation sentence(s): the task is %r, "
+            "which does not ask to be advised", dropped_judgments, task_type or "general",
+        )
+
+    if not composition.tiers:
+        composition.reason = "every generated sentence failed grounding"
+        logger.warning("tiered composition discarded: all %d sentence(s) struck", total)
+        return composition
+
+    # The rendered text keeps facts first, then the derived tiers, so the
+    # answer reads in the order the reasoning happened.
+    blocks = ["\n".join(composition.tiers[tier]) for tier in TIERS if tier in composition.tiers]
+    composition.text = "\n\n".join(blocks)
+    composition.used = True
+    composition.reason = (
+        f"{len(composition.report.kept)}/{total} sentences grounded "
+        f"({', '.join(f'{len(v)} {k}' for k, v in composition.tiers.items())})"
+    )
+    logger.info("answer composed in tiers: %s", composition.reason)
+    return composition
 
 
 def compose_answer(

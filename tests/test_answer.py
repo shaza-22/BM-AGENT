@@ -418,3 +418,149 @@ class TestInternalIdentifiersNeverReachTheReader:
 
         for label in ["Interest rate", "Penalty for delay", "3", ""]:
             assert _humanise_label(label) == label
+
+
+class TestTieredAnswers:
+    """Three kinds of sentence, three warranties, one model call.
+
+    The spec asks the agent to analyse, compare and summarise. Analysis means
+    derived statements -- "issuance and renewal are both EGP 250, so there is
+    no increase after year one" is written on no page, though both figures are.
+    Composed prose produced only literal restatements because the prompt
+    forbade anything else, not because grounding struck them.
+    """
+
+    CLAIMS = [
+        {"entity": "Issuance", "value": "EGP 250", "source_url": "https://x/c"},
+        {"entity": "Renewal", "value": "EGP 250", "source_url": "https://x/c"},
+        {"entity": "Supplementary cards issuance and renewal", "value": "EGP100",
+         "source_url": "https://x/c"},
+        {"entity": "Interest rate", "value": "4% monthly", "source_url": "https://x/c"},
+    ]
+
+    def _reply(self, *pairs):
+        import json
+        return json.dumps({"sentences": [{"tier": t, "text": s} for t, s in pairs]})
+
+    def _compose(self, reply, task_type="general", **kwargs):
+        from agent.answer import compose_tiered
+
+        return compose_tiered("what are the fees?", self.CLAIMS,
+                              FakeLLMClient(lambda p: reply), task_type=task_type, **kwargs)
+
+    def test_facts_and_analysis_are_kept_apart(self):
+        result = self._compose(self._reply(
+            ("fact", "Issuance — EGP 250."),
+            ("analysis", "Issuance and renewal are both EGP 250, so nothing rises after year one."),
+        ))
+        assert result.used and result.tiered
+        assert result.tiers["fact"] == ["Issuance — EGP 250."]
+        assert len(result.tiers["analysis"]) == 1
+
+    def test_an_invented_figure_dies_in_analysis_exactly_as_in_fact(self):
+        """Grounding runs on every tier, unchanged. This is the load-bearing test."""
+        result = self._compose(self._reply(
+            ("fact", "Issuance — EGP 250."),
+            ("analysis", "The Gold card is EGP 600, which is higher."),
+        ))
+        assert "600" not in result.text
+        assert "analysis" not in result.tiers
+        assert any("600" in reason for _s, reason in result.report.struck)
+
+    def test_recombination_dies_in_analysis_too(self):
+        result = self._compose(self._reply(
+            ("fact", "Issuance — EGP 250."),
+            ("analysis", "Interest rate is EGP 250 per month."),
+        ))
+        assert "analysis" not in result.tiers
+
+    def test_judgment_only_where_the_task_asks_to_be_advised(self):
+        """A prompt asks; a guard clause guarantees.
+
+        A model handed a fee question will sometimes volunteer a
+        recommendation, and an unasked-for opinion from a bank's assistant is
+        worth dropping rather than relabelling.
+        """
+        reply = self._reply(
+            ("fact", "Issuance — EGP 250."),
+            ("judgment", "For occasional use I would suggest the Classic at EGP 250."),
+        )
+        assert "judgment" not in self._compose(reply, task_type="general").tiers
+        assert "judgment" in self._compose(reply, task_type="recommendation").tiers
+        assert "judgment" in self._compose(reply, task_type="comparison").tiers
+
+    def test_the_withheld_case_says_so_in_the_prompt_as_well(self):
+        seen = {}
+        from agent.answer import compose_tiered
+
+        compose_tiered("q", self.CLAIMS,
+                       FakeLLMClient(lambda p: seen.setdefault("p", p) or
+                                     self._reply(("fact", "Issuance — EGP 250."))),
+                       task_type="general")
+        assert "Do not offer a recommendation" in seen["p"]
+
+    def test_an_unknown_tier_is_treated_as_the_strictest(self):
+        """Never presented as the agent's opinion by default."""
+        result = self._compose(self._reply(("speculation", "Issuance — EGP 250.")))
+        assert result.tiers.get("fact") == ["Issuance — EGP 250."]
+
+    def test_zero_claims_means_no_call_at_all(self):
+        from agent.answer import compose_tiered
+
+        called = []
+        result = compose_tiered("q", [], FakeLLMClient(lambda p: called.append(p) or "{}"))
+        assert called == [] and result.attempted is False
+
+    @pytest.mark.parametrize("bad", ["not json", '{"sentences": []}', "{}", ""])
+    def test_a_bad_reply_falls_back_without_losing_the_answer(self, bad: str):
+        result = self._compose(bad)
+        assert result.used is False and result.attempted is True
+
+    def test_it_costs_no_extra_model_call(self):
+        """The tiers are the shape of the existing composition reply."""
+        calls = {"n": 0}
+
+        def counting(_p):
+            calls["n"] += 1
+            return self._reply(("fact", "Issuance — EGP 250."),
+                               ("analysis", "Renewal is also EGP 250."))
+
+        from agent.answer import compose_tiered
+
+        compose_tiered("q", self.CLAIMS, FakeLLMClient(counting), task_type="general")
+        assert calls["n"] == 1
+
+
+class TestArabicScaffolding:
+    """An Arabic answer must not come out as a bare list once extraction works.
+
+    Measured before this: `هذه الأرقام مأخوذة من صفحة البنك.` was struck as an
+    unsupported assertion, because the scaffolding vocabulary was English only.
+    Both vocabularies are matched always rather than switched on a detected
+    language -- a switch is a guess, and guessing wrong here decides whether an
+    assertion is checked.
+    """
+
+    CLAIMS = [{"entity": "رسوم الإصدار", "value": "250 جنيه"}]
+
+    @pytest.mark.parametrize("sentence", [
+        "إليك رسوم البطاقة الائتمانية:",
+        "فيما يلي الرسوم والمصاريف",
+        "هذه الأرقام مأخوذة من صفحة البنك.",
+        "باختصار، الرسوم كالتالي:",
+    ])
+    def test_arabic_scaffolding_survives(self, sentence: str):
+        assert check_grounding(sentence, self.CLAIMS).text == sentence
+
+    @pytest.mark.parametrize("sentence", [
+        "لا توجد رسوم سنوية.",
+        "جميع البطاقات مجانية.",
+        "بنك مصر هو ثاني أكبر بنك في مصر.",
+    ])
+    def test_arabic_assertions_are_still_struck(self, sentence: str):
+        """The negation guard has to hold in both languages or it holds in neither."""
+        assert check_grounding(sentence, self.CLAIMS).text == ""
+
+    def test_english_behaviour_is_unchanged(self):
+        assert check_grounding("Here are the fees:", self.CLAIMS).text == "Here are the fees:"
+        assert check_grounding("There is no annual fee.", self.CLAIMS).text == ""

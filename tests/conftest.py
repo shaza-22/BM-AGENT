@@ -173,7 +173,9 @@ def live_fetcher(**kwargs):
 
 
 PLANNING_MARKER = "Break this into the sub-goals needed to answer it"
-COMPOSING_MARKER = "Write the answer to the user's question"
+# Imported rather than duplicated: the composer has two prompt variants and a
+# marker copied here would silently stop matching when one of them changes.
+from agent.answer import COMPOSING_MARKER  # noqa: E402  (re-exported for tests)
 EXTRACTION_MARKER = "Pull out the facts on this page"
 
 

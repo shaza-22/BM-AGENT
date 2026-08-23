@@ -58,7 +58,7 @@ from typing import Any, Callable, Iterable
 
 from agent import config
 from agent.acceptance import AcceptanceGate, GateDecision, gate_from_config
-from agent.answer import compose_answer
+from agent.answer import compose_answer, compose_tiered
 from agent.extraction import Extraction, extract_facts
 from agent.planner import PlanDraft, plan_with_model
 from agent.llm import LLMClient, LLMError
@@ -135,6 +135,7 @@ class LoopResult:
     # How the plan was decomposed, and why. "keyword" is the vendored planner;
     # "model" is agent/planner.py. Reported so the interface can say which,
     # rather than presenting a keyword match as agentic planning.
+    answer_tiers: dict[str, list[str]] = field(default_factory=dict)
     plan_source: str = "keyword"             # "keyword" | "model"
     plan_reasoning: str = ""
     # Every hop of every sub-goal, in order. Kept so the session can summarise
@@ -292,6 +293,7 @@ class ResearchLoop:
         compose: bool | None = None,
         planning: bool | None = None,
         fallback: bool | None = None,
+        tiers: bool | None = None,
     ) -> None:
         self._llm = _CountingLLM(llm)
         self._fetcher = fetcher
@@ -305,6 +307,7 @@ class ResearchLoop:
         self._max_expansion_depth = max_expansion_depth
         self._compose = config.COMPOSE_ANSWER if compose is None else compose
         self._fallback = (config.LLM_EXTRACTION_FALLBACK if fallback is None else fallback)
+        self._tiers = config.ANSWER_TIERS if tiers is None else tiers
         self._planning = config.LLM_PLANNING if planning is None else planning
 
         self._pages_used = 0
@@ -880,8 +883,11 @@ class ResearchLoop:
             for chk in verification.get("passed", [])
             if isinstance(chk, dict)
         ]
-        composition = compose_answer(
-            task, verified, self._llm, language=self._language
+        composition = (
+            compose_tiered(task, verified, self._llm, language=self._language,
+                           task_type=result.task_type)
+            if self._tiers else
+            compose_answer(task, verified, self._llm, language=self._language)
         )
         result.composition = composition.to_dict()
 
@@ -892,4 +898,5 @@ class ResearchLoop:
         if composition.used:
             result.answer = composition.text
             result.answer_source = "composed"
+            result.answer_tiers = dict(composition.tiers)
         self._emit("answer_composed", **composition.to_dict())

@@ -216,6 +216,14 @@
   .answer li { margin:3px 0; }
   .answer > *:last-child { margin-bottom:0; }
 
+  /* Derived statements: set apart from the facts, and labelled in place. */
+  .derived { margin-top:16px; padding:12px 14px; border-radius:0 10px 10px 0;
+             border-inline-start:3px solid var(--gold); background:var(--gold-soft); }
+  .derived.judgment { border-inline-start-width:5px; }
+  .derived .kicker { font-size:10.5px; text-transform:uppercase; letter-spacing:.07em;
+                     font-weight:700; color:var(--warn); margin-bottom:6px; text-align:start; }
+  .derived .answer { font-size:15px; }
+
   .support { display:flex; align-items:center; gap:10px; flex-wrap:wrap;
              margin-top:16px; padding-top:14px; border-top:1px solid var(--line-soft);
              font-size:12.5px; color:var(--muted); font-variant-numeric:tabular-nums; }
@@ -588,6 +596,33 @@ function addHop(d) {
 }
 
 /* --- the answer -------------------------------------------------------- */
+// Three kinds of sentence, three different warranties. A derived conclusion
+// must never wear a verified fact's badge, so the distinction is written into
+// the block rather than carried by colour alone — colour fails in a screenshot
+// and for a colour-blind reader, and a legend elsewhere on the page is a
+// legend nobody reads.
+const TIER_KICKER = {
+  analysis: "The agent's reading — worked out from the facts above, not stated on any page",
+  judgment: "Recommendation — the agent's opinion, not the bank's",
+};
+
+function answerBody(d) {
+  const tiers = (d.composition && d.composition.tiers) || null;
+  if (!tiers || !tiers.fact) return `<div class="answer" dir="auto">${md(d.answer || "")}</div>`;
+
+  let html = `<div class="answer" dir="auto">${md((tiers.fact || []).join("\n"))}</div>`;
+  for (const tier of ["analysis", "judgment"]) {
+    const lines = tiers[tier];
+    if (!lines || !lines.length) continue;
+    html +=
+      `<div class="derived ${tier}">` +
+        `<div class="kicker">${esc(TIER_KICKER[tier])}</div>` +
+        `<div class="answer" dir="auto">${md(lines.join("\n"))}</div>` +
+      `</div>`;
+  }
+  return html;
+}
+
 function showAnswer(d) {
   if (!turn) return;
   turn.answered = true;
@@ -618,6 +653,12 @@ function showAnswer(d) {
       `<div class="support"><span>Facts whose value was found on the page they cite</span>` +
       `<span class="bar ${cls}"><i style="width:${pct}%"></i></span>` +
       `<span>${d.claims_supported}/${d.claims_total} (${pct}%)</span></div>` +
+      // Says what the bar covers. Figures are checked in all three tiers; the
+      // inference in a derived sentence is never checked, and the bar must not
+      // be read as vouching for it.
+      (composed && d.composition && d.composition.tiered
+        ? `<div class="caveat">Every figure is checked in all three tiers. The ` +
+          `reasoning in a derived statement is the agent's and is not verified.</div>` : "") +
       (pct < 100 ? `<div class="caveat">Unsupported statements were removed from the answer ` +
                    `above rather than shown with sources beneath them.</div>` : "");
   }
@@ -652,7 +693,7 @@ function showAnswer(d) {
 
   turn.final.innerHTML =
     `<div class="card answer-card${d.resolved_count ? "" : " none"}">` +
-      `<div class="answer" dir="auto">${md(d.answer || "")}</div>` +
+      answerBody(d) +
       support + provenance +
       (d.budget_exhausted ? `<div class="caveat">Stopped early: ${esc(d.budget_exhausted)}.</div>` : "") +
       (d.gate_rejections ? `<div class="caveat">${d.gate_rejections} page(s) were accepted by ` +

@@ -209,6 +209,11 @@ class AnswerComposedEvent(BaseModel):
     reason: str = ""
     claims_offered: int = 0
     grounding: dict[str, Any] | None = None
+    # Sentences by tier -- "fact", "analysis", "judgment". Carried separately
+    # from the answer text so the interface can show which statements the
+    # bank's website is responsible for and which the agent is.
+    tiered: bool = False
+    tiers: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class AnswerEvent(BaseModel):

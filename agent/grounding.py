@@ -126,9 +126,16 @@ _NUMERIC_LABEL = re.compile(r"^[\d\s.,%-]+$")
 # scaffolding regardless of anything else.
 
 # Words that turn a sentence into a claim about what is or is not the case.
+#
+# Arabic is listed alongside English rather than in a separate pass: the
+# alternative is a language switch, and a switch means guessing the language of
+# a sentence before deciding whether it is safe. Matching both vocabularies
+# always is stricter and has no branch to get wrong.
 _NEGATION = re.compile(
     r"\b(no|not|none|never|without|free|excluded|included|unlimited|any|"
     r"isn'?t|aren'?t|doesn'?t|don'?t|won'?t|cannot|can'?t)\b"
+    # لا / ليس / ليست / بدون / مجاناً / غير / لم / لن / أبداً / جميع / كل
+    r"|(لا\s|ليس|ليست|بدون|مجان|غير\s|لم\s|لن\s|أبد|جميع|كافة|كل\s)"
 )
 
 # Talking about the answer or its sources rather than about the bank.
@@ -138,6 +145,13 @@ _META = re.compile(
     r"from the (page|source|card'?s|bank'?s)|listed|shown|see the source|"
     r"summar(y|ised|ized)|breakdown|in summary|note that|all figures|"
     r"the figures (above|below)|source[sd]?)\b"
+    # Arabic equivalents. Measured before this: an Arabic connective sentence
+    # such as "هذه الأرقام مأخوذة من صفحة البنك." was struck as an unsupported
+    # assertion, so an Arabic answer came out as a bare list of values even
+    # when extraction worked -- the same symptom the English fix addressed.
+    r"|(إليك|فيما يلي|كما يلي|التالي|أدناه|أعلاه|هذه الأرقام|هذه المعلومات|"
+    r"وفقا|وفقًا|مأخوذة|مصدر|المصدر|حسب الصفحة|من الصفحة|من صفحة|"
+    r"باختصار|ملخص|الخلاصة|يرجى ملاحظة|الأرقام)"
 )
 
 # A heading or lead-in: ends with a colon, or is a short markdown heading or
