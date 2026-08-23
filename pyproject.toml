@@ -1,6 +1,10 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]
+# "src" carries the vendored Person B package (src/person_b), whose 58 modules
+# import absolutely as ``person_b.*``. Putting src on the path here is what lets
+# both halves import without packaging either -- and it replaces the sys.path
+# hack their own conftest shipped with, so only one mechanism is in play.
+pythonpath = [".", "src"]
 addopts = "-q"
 
 [tool.ruff]
