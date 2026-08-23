@@ -139,6 +139,8 @@
   .sg.pending .q { color:var(--muted); }
   .sg.running .q { font-weight:600; }
   .sg .why2 { color:var(--muted); font-size:12.5px; margin-top:1px; }
+  .plan-why { font-size:12.5px; color:var(--muted); margin:-4px 0 12px; text-align:start; }
+  .plan-why b { color:var(--ink); font-weight:600; }
   .budget { margin-top:12px; padding-top:11px; border-top:1px solid var(--line-soft);
             font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums; }
 
@@ -367,6 +369,7 @@ function newTurn(task) {
       `<div class="t-badge"></div>` +
       `<div class="t-interpreting"></div>` +
       `<div class="t-plan card" hidden><h3 class="section">Plan</h3>` +
+        `<div class="t-plan-why"></div>` +
         `<div class="t-sgs"></div><div class="t-budget budget"></div></div>` +
       `<details class="t-trail card trail" open><summary>How it got there</summary>` +
         `<div class="t-hops"></div></details>` +
@@ -378,6 +381,7 @@ function newTurn(task) {
     badge: el.querySelector(".t-badge"),
     interpreting: el.querySelector(".t-interpreting"),
     planCard: el.querySelector(".t-plan"),
+    planWhy: el.querySelector(".t-plan-why"),
     sgs: el.querySelector(".t-sgs"),
     budget: el.querySelector(".t-budget"),
     trail: el.querySelector(".t-trail"),
@@ -420,10 +424,13 @@ function renderPlan() {
   turn.planCard.hidden = false;
   turn.sgs.innerHTML = turn.plan.order.map((id) => {
     const sg = turn.plan.byId[id], state = sg.status || "pending";
+    // While a sub-goal is still queued its own rationale is the useful line;
+    // once it has run, what happened to it is.
+    const note = sg.reason || (state === "pending" && sg.why) || SG_WORD[state] || "";
     return `<div class="sg ${esc(state)}">` +
       `<span class="dot">${SG_MARK[state] || ""}</span>` +
       `<span class="q"><span dir="auto">${esc(sg.question)}</span>` +
-      `<div class="why2" dir="auto">${esc(sg.reason || SG_WORD[state] || "")}</div></span></div>`;
+      `<div class="why2" dir="auto">${esc(note)}</div></span></div>`;
   }).join("");
 }
 
@@ -432,8 +439,16 @@ function showPlan(d) {
   turn.plan = { order: [], byId: {} };
   (d.sub_goals || []).forEach((sg) => {
     turn.plan.order.push(sg.id);
-    turn.plan.byId[sg.id] = { question: sg.question, status: sg.status || "pending", reason: "" };
+    turn.plan.byId[sg.id] = { question: sg.question, status: sg.status || "pending",
+                              reason: "", why: sg.why || "" };
   });
+  // Say which planner wrote this. A keyword match presented as agentic
+  // planning would be the same kind of overclaim as a green bar over zero
+  // claims, so the label is not optional.
+  turn.planWhy.innerHTML = d.plan_source === "model"
+    ? `<div class="plan-why"><b>Decomposed by the model</b>` +
+      (d.plan_reasoning ? ` — <span dir="auto">${esc(d.plan_reasoning)}</span>` : "") + `</div>`
+    : `<div class="plan-why">Decomposed by keyword rules.</div>`;
   renderPlan(); showBudget(d);
 }
 

@@ -18,6 +18,7 @@ from conftest import choose_by, live_fetcher  # noqa: E402
 
 from agent.acceptance import AcceptanceGate, gate_from_config  # noqa: E402
 from agent.llm import FakeLLMClient, LLMError  # noqa: E402
+from agent import config  # noqa: E402
 from agent.loop import ResearchLoop, _Verdicts  # noqa: E402
 
 CARDS = "/Pages/Cards"
@@ -32,7 +33,8 @@ BOILERPLATE = "Retail Banking Corporate Banking Islamic Banking Quick Links E-St
 
 def build(*needles: str, **kwargs) -> tuple[ResearchLoop, list]:
     events: list[tuple[str, dict]] = []
-    kwargs.setdefault("compose", False)   # navigation under test, not wording
+    kwargs.setdefault("compose", False)    # navigation under test, not wording
+    kwargs.setdefault("planning", False)   # ...nor decomposition: see TestModelPlanning
     loop = ResearchLoop(
         FakeLLMClient(choose_by(*needles)),
         fetcher=live_fetcher(),
@@ -397,3 +399,142 @@ class TestNamedEntityNarrowing:
                    "extracted": {"entities": [{"name": n} for n in self.CARDS_FOUND]}}
         same = ResearchLoop._narrow_to_named_entities(verdict, "Which card is best for travel?")
         assert len(same["extracted"]["entities"]) == len(self.CARDS_FOUND)
+
+
+class TestModelPlanning:
+    """Decomposition by the model, and the ways it must fail safe.
+
+    The vendored planner decomposes by keyword and produced exactly one
+    sub-goal for every task measured, so a plan panel showed one restated line.
+    This replaces the questions; it must never be able to leave a run without a
+    plan.
+    """
+
+    def _run(self, respond, task, **kwargs):
+        events: list[tuple[str, dict]] = []
+        loop = ResearchLoop(FakeLLMClient(respond), fetcher=live_fetcher(),
+                            on_event=lambda n, d: events.append((n, d)),
+                            compose=False, planning=True, **kwargs)
+        return loop.run(task), events
+
+    def _script(self, plan_json: str, *needles: str):
+        """Answer the planning prompt with plan_json, navigate by needles."""
+        from conftest import PLANNING_MARKER
+
+        nav = choose_by(*needles)
+        return lambda p: plan_json if PLANNING_MARKER in p else nav(p)
+
+    def test_a_decomposed_plan_replaces_the_keyword_one(self):
+        from conftest import plan_reply
+
+        plan = plan_reply("Find the list of Banque Misr credit cards",
+                          "Find the fees of the Classic credit card",
+                          reasoning="the request needs the list, then the fees")
+        result, events = self._run(
+            self._script(plan, CARDS, CARD_LIST, "Classic%20Credit%20Cards"),
+            "What credit cards are there and what do they cost?")
+
+        assert result.plan_source == "model"
+        assert result.plan_reasoning == "the request needs the list, then the fees"
+        assert len(result.outcomes) == 2
+        assert [o.question for o in result.outcomes] == [
+            "Find the list of Banque Misr credit cards",
+            "Find the fees of the Classic credit card",
+        ]
+
+    def test_the_plan_event_carries_its_provenance_and_rationale(self):
+        from conftest import plan_reply
+
+        _r, events = self._run(
+            self._script(plan_reply("Find the list of Banque Misr credit cards"), CARDS),
+            "What credit cards does Banque Misr offer?")
+        plan_event = next(d for n, d in events if n == "plan")
+        assert plan_event["plan_source"] == "model"
+        assert plan_event["sub_goals"][0]["why"], "the per-sub-goal rationale was dropped"
+
+    def test_planning_costs_exactly_one_call(self):
+        from conftest import plan_reply
+
+        with_planning, _ = self._run(
+            self._script(plan_reply("Find the list of Banque Misr credit cards"), CARDS, CARD_LIST),
+            "What credit cards does Banque Misr offer?")
+        without = ResearchLoop(FakeLLMClient(choose_by(CARDS, CARD_LIST)),
+                               fetcher=live_fetcher(), on_event=lambda n, d: None,
+                               compose=False, planning=False,
+                               ).run("What credit cards does Banque Misr offer?")
+        assert with_planning.llm_calls_used == without.llm_calls_used + 1
+
+    def test_the_cap_is_enforced_on_what_the_model_returns(self):
+        from conftest import plan_reply
+
+        result, _ = self._run(
+            self._script(plan_reply(*[f"Find thing number {i}" for i in range(9)]), CARDS),
+            "do everything", max_sub_goals=9)
+        assert len(result.outcomes) <= config.MAX_PLANNED_SUB_GOALS
+
+    # --- failing safe ----------------------------------------------------
+    @pytest.mark.parametrize("reply,why", [
+        ("not json at all", "unparseable"),
+        ('{"sub_goals": []}', "empty list"),
+        ('{"sub_goals": [{"question": "", "why": "x"}]}', "blank question"),
+        ('{"sub_goals": [{"question": "short"}]}', "too short to navigate"),
+        ('{"nope": 1}', "no sub_goals key"),
+    ])
+    def test_a_bad_plan_falls_back_to_the_keyword_planner(self, reply: str, why: str):
+        result, _ = self._run(self._script(reply, CARDS, CARD_LIST),
+                              "What credit cards does Banque Misr offer?")
+        assert result.plan_source == "keyword", why
+        assert result.outcomes, "the run lost its plan entirely"
+
+    def test_an_unreachable_model_still_leaves_a_plan(self):
+        from agent.llm import LLMError
+        from conftest import PLANNING_MARKER
+
+        nav = choose_by(CARDS, CARD_LIST)
+
+        def respond(prompt: str) -> str:
+            if PLANNING_MARKER in prompt:
+                raise LLMError("quota exhausted for today")
+            return nav(prompt)
+
+        result, _ = self._run(respond, "What credit cards does Banque Misr offer?")
+        assert result.plan_source == "keyword"
+        assert result.outcomes
+
+    def test_duplicate_sub_goals_are_dropped(self):
+        from agent.planner import parse_plan
+
+        parsed = parse_plan(
+            '{"sub_goals": [{"question": "Find the credit card list"},'
+            ' {"question": "find the CREDIT card list"},'
+            ' {"question": "Find the fees of the Classic card"}], "reasoning": ""}',
+            max_sub_goals=3)
+        assert len(parsed) == 2
+
+    # --- the conflict with expansion -------------------------------------
+    def test_a_decomposed_plan_turns_expansion_off(self):
+        """Two mechanisms doing one job would double-count and duplicate."""
+        from conftest import plan_reply
+
+        _result, events = self._run(
+            self._script(plan_reply("Find the list of Banque Misr credit cards",
+                                    "Find the fees of the Classic credit card"),
+                         CARDS, CARD_LIST, "Classic%20Credit%20Cards"),
+            "Which credit card is best for travel?")
+        assert not [n for n, _d in events if n == "plan_expanded"]
+
+    def test_a_single_sub_goal_plan_leaves_expansion_on(self):
+        """Expansion is the fallback for entities nothing could know up front."""
+        from conftest import plan_reply
+
+        _result, events = self._run(
+            self._script(plan_reply("Find the list of Banque Misr credit cards"),
+                         CARDS, CARD_LIST),
+            "Which credit card is best for travel?")
+        assert [n for n, _d in events if n == "plan_expanded"]
+
+    def test_off_by_config_is_a_one_line_revert(self):
+        result = ResearchLoop(FakeLLMClient(choose_by(CARDS)), fetcher=live_fetcher(),
+                              on_event=lambda n, d: None, compose=False, planning=False,
+                              ).run("What credit cards does Banque Misr offer?")
+        assert result.plan_source == "keyword"

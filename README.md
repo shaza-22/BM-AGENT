@@ -32,6 +32,7 @@ agent/
   link_selector.py   ranking, prompt, defensive parsing, select_next_link
   navigator.py       the navigation loop -> NavigationResult
   loop.py            the orchestrator: plan -> navigate each sub-goal -> answer
+  planner.py         decomposing a task into sub-goals with the model
   acceptance.py      the acceptance gate: a second opinion on "resolved"
   answer.py          composing the final prose from verified claims only
   grounding.py       striking any generated sentence the evidence lacks
@@ -779,6 +780,51 @@ impossible to reason about from outside.
 A task is no longer one navigation. `agent/loop.py` plans it into sub-goals,
 navigates each one **live from the seed**, expands the plan from what it finds,
 then synthesises, verifies and finalises.
+
+### Who decomposes the task
+
+`plan_task` in the vendored layer decomposes by keyword — it matches "credit
+card", "loan", "account", and otherwise emits one sub-goal restating the task.
+Measured across eight varied tasks it produced **exactly one sub-goal every
+time**, so the plan panel showed a single restated line and "planning" was a
+word for string interpolation.
+
+`agent/planner.py` asks the model instead, constrained by a schema, and
+rewrites the plan's sub-goals in place. `task_type` and `target_fields` are
+left exactly as the keyword planner set them — the validator's own branches
+read those, and changing what feeds them from here would be reaching into the
+other half of the project.
+
+Every failure keeps the keyword plan: unreachable model, unparseable reply,
+empty list, blank or duplicated questions. Planning can improve a plan; it can
+never leave a run without one. `LLM_PLANNING = False` reverts in one line.
+
+The interface says which planner produced the plan. A keyword match presented
+as agentic planning would be the same kind of overclaim as a green bar over
+zero claims.
+
+**Why the cap is three.** The model is called once per hop, measured. With
+`LOOP_MAX_LLM_CALLS = 12` and one call reserved for composing the answer,
+planning takes one more and leaves ten for navigation. Pages here resolve in
+one to three hops:
+
+| planned sub-goals | typical (3 hops) | worst case (5 hops) |
+|---|---|---|
+| 2 | 6 ✓ | 10 ✓ |
+| **3** | **9 ✓** (11/12 total) | 15 ✗ — budget stops it after 2 |
+| 4 | 12 ✗ | 20 ✗ |
+
+Three is the largest number whose typical case fits. The worst case overruns
+*visibly*: the remaining sub-goals are marked not-available with the reason and
+appear in the answer's Not-found list.
+
+**Expansion and planning do the same job by different means**, so they must not
+both run. The planner writes "the fees of the Classic card" while `expand_plan`
+adds "Find fees for Classic Credit Card" off the page it landed on — two
+mechanisms competing for one budget and producing near-duplicates. The rule:
+**if the planner decomposed, expansion is off; if it returned a single
+sub-goal, expansion stays on** as the fallback that finds what nothing could
+know before a page was fetched.
 
 **Expansion is gated on task type.** `expand_plan` reads the entity list off
 whatever page resolved and makes a sub-goal per entity, without consulting the

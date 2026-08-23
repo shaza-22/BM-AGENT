@@ -284,3 +284,29 @@ COMPOSE_ANSWER = True
 # the prompt stays small and the grounding set stays the same set the model
 # was shown, which is what makes "every figure must be quoted" checkable.
 COMPOSE_MAX_FACTS = 40
+
+
+# --- Agentic planning ------------------------------------------------------
+# The vendored planner decomposes by keyword and, measured across eight varied
+# tasks, produced exactly one sub-goal every time -- a plan panel showing one
+# restated line. agent/planner.py asks the model to decompose instead, and
+# falls back to the keyword planner on any failure.
+#
+# Set False to revert to deterministic planning in one line. Everything
+# downstream is unchanged either way: the sub-goals are navigated, validated,
+# expanded and reported by exactly the same code.
+LLM_PLANNING = True
+
+# Cap on what the planner may return, before any expansion.
+#
+# The model is called once per hop, measured. With LOOP_MAX_LLM_CALLS = 12 and
+# one call reserved for composing the answer, planning takes one more and
+# leaves ten for navigation. Pages here resolve in one to three hops, so:
+#
+#     3 sub-goals x 3 hops = 9, plus plan and compose = 11   fits
+#     4 sub-goals x 3 hops = 12, plus plan and compose = 14  does not
+#
+# A sub-goal that runs to MAX_HOPS spends the budget early; the remainder are
+# then marked not-available with the reason and appear in the answer, so the
+# overrun is visible rather than silent.
+MAX_PLANNED_SUB_GOALS = 3

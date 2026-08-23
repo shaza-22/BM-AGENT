@@ -98,6 +98,9 @@ class PlanSubGoal(BaseModel):
     id: str
     question: str
     status: str = "pending"
+    # One line from the planner on why this sub-goal is needed. Empty when the
+    # keyword planner produced it, which has no such notion.
+    why: str = ""
 
 
 class PlanEvent(BaseModel):
@@ -106,6 +109,11 @@ class PlanEvent(BaseModel):
     target_fields: list[str] = Field(default_factory=list)
     sub_goals: list[PlanSubGoal] = Field(default_factory=list)
     gate_enabled: bool = True
+    # "keyword" -- the vendored planner's keyword branches. "model" -- decomposed
+    # by agent/planner.py. Surfaced so a keyword match is never presented as
+    # agentic planning.
+    plan_source: str = "keyword"
+    plan_reasoning: str = ""
     pages_used: int = 0
     pages_max: int = 0
     llm_calls_used: int = 0

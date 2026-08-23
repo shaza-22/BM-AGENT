@@ -59,6 +59,7 @@ from typing import Any, Callable, Iterable
 from agent import config
 from agent.acceptance import AcceptanceGate, GateDecision, gate_from_config
 from agent.answer import compose_answer
+from agent.planner import PlanDraft, plan_with_model
 from agent.llm import LLMClient, LLMError
 from agent.navigator import NavigationResult, Navigator
 from agent.trail_log import StepLogger
@@ -127,6 +128,11 @@ class LoopResult:
     answer_source: str = "template"          # "template" | "composed"
     composition: dict[str, Any] | None = None
     template_answer: str = ""
+    # How the plan was decomposed, and why. "keyword" is the vendored planner;
+    # "model" is agent/planner.py. Reported so the interface can say which,
+    # rather than presenting a keyword match as agentic planning.
+    plan_source: str = "keyword"             # "keyword" | "model"
+    plan_reasoning: str = ""
     # Every hop of every sub-goal, in order. Kept so the session can summarise
     # a turn without the loop having to hand back page content.
     trail: list[Any] = field(default_factory=list)
@@ -163,6 +169,8 @@ class LoopResult:
             "error_reason": self.error_reason,
             "gate_rejections": self.gate_rejections,
             "answer_source": self.answer_source,
+            "plan_source": self.plan_source,
+            "plan_reasoning": self.plan_reasoning,
             "composition": self.composition,
             "template_answer": self.template_answer,
             "resolved_count": self.resolved_count,
@@ -278,6 +286,7 @@ class ResearchLoop:
         max_llm_calls: int = config.LOOP_MAX_LLM_CALLS,
         max_expansion_depth: int = config.MAX_EXPANSION_DEPTH,
         compose: bool | None = None,
+        planning: bool | None = None,
     ) -> None:
         self._llm = _CountingLLM(llm)
         self._fetcher = fetcher
@@ -290,8 +299,10 @@ class ResearchLoop:
         self._max_llm_calls = max_llm_calls
         self._max_expansion_depth = max_expansion_depth
         self._compose = config.COMPOSE_ANSWER if compose is None else compose
+        self._planning = config.LLM_PLANNING if planning is None else planning
 
         self._pages_used = 0
+        self._planned_sub_goals = 0
         self._page_text: dict[str, str] = {}
         self._visited: list[str] = []
         self._gate_rejections = 0
@@ -411,16 +422,29 @@ class ResearchLoop:
                "max_expansion_sub_goals": self._max_sub_goals}
         )
 
+        # The keyword planner runs first and always. It sets task_type and
+        # target_fields, which the validator's own branches read, and it is the
+        # plan that stands if model planning is off or fails.
         plan = plan_task(task, pb_config)
         result = LoopResult(task=task, plan_id=plan.id, task_type=plan.goal.task_type)
+
+        draft = (plan_with_model(task, plan, self._llm, language=self._language)
+                 if self._planning else PlanDraft(reason="planning disabled for this run"))
+        if draft.used:
+            result.plan_source = "model"
+            result.plan_reasoning = draft.reasoning
+        self._planned_sub_goals = len(plan.sub_goals) if draft.used else 0
         self._emit(
             "plan",
             plan_id=plan.id,
             task_type=plan.goal.task_type,
             target_fields=plan.goal.metadata.get("target_fields", []),
-            sub_goals=[{"id": sg.id, "question": sg.question, "status": sg.status.value}
+            sub_goals=[{"id": sg.id, "question": sg.question, "status": sg.status.value,
+                        "why": sg.metadata.get("why", "")}
                        for sg in plan.sub_goals],
             gate_enabled=self._gate.enabled,
+            plan_source=result.plan_source,
+            plan_reasoning=result.plan_reasoning,
             **self._budget(),
         )
 
@@ -617,6 +641,18 @@ class ResearchLoop:
         if len(plan.sub_goals) >= self._max_sub_goals:
             return False
         if sub_goal.metadata.get("expansion_depth", 0) >= self._max_expansion_depth:
+            return False
+        # Model planning and expansion do the same job by different means, and
+        # running both means two mechanisms competing for one budget and
+        # producing near-duplicate sub-goals -- the planner writing "the fees
+        # of the Classic card" while expansion adds "Find fees for Classic
+        # Credit Card" off the page it landed on.
+        #
+        # So: if the planner decomposed, it has already done the job. If it
+        # returned a single sub-goal, expansion is the fallback that finds what
+        # the planner could not know before anything was fetched -- which is
+        # most of what expansion is for.
+        if self._planned_sub_goals > 1:
             return False
         return plan.goal.task_type in self.EXPANDING_TASK_TYPES
 

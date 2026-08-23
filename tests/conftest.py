@@ -172,16 +172,49 @@ def live_fetcher(**kwargs):
     return Fetcher(session=FakeSession(live_routes()), **kwargs)
 
 
+PLANNING_MARKER = "Break this into the sub-goals needed to answer it"
+COMPOSING_MARKER = "Write the answer to the user's question"
+
+
+def plan_reply(*questions: str, reasoning: str = "decomposed for the test") -> str:
+    """A planner reply with the given sub-goals, as agent/planner.py expects."""
+    return json.dumps({
+        "sub_goals": [{"question": q, "why": "needed for the test"} for q in questions],
+        "reasoning": reasoning,
+    })
+
+
+def echo_plan(prompt: str) -> str:
+    """A one-sub-goal plan restating the task, taken from the prompt itself.
+
+    The planning call happens before any navigation, so a script that only
+    knows about link choices would have its first choice eaten by it. This
+    answers planning faithfully -- one sub-goal, which is what the keyword
+    planner produced for nearly every task -- so tests written before planning
+    existed keep testing what they were written to test.
+    """
+    task = ""
+    marker = "A user asked a bank's research assistant:"
+    if marker in prompt:
+        task = prompt.split(marker, 1)[1].strip().splitlines()[0].strip()
+    return plan_reply(task or "Find information for the request")
+
+
 def choose_by(*needles: str):
     """A FakeLLMClient callable that picks the first candidate line matching.
 
     Tests drive navigation by *label*, not by index: ranking decides the
     numbering, so a hardcoded index would break whenever a weight changes and
     would tell us nothing about the behaviour under test.
+
+    Planning and composition prompts are answered separately and do not consume
+    a needle -- the script is about where the agent walks.
     """
     remaining = list(needles)
 
     def respond(prompt: str) -> str:
+        if PLANNING_MARKER in prompt:
+            return echo_plan(prompt)
         needle = remaining.pop(0) if remaining else None
         if needle is None:
             return json.dumps({"choice": -1, "reasoning": "script exhausted", "confidence": 0.4})
