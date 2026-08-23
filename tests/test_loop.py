@@ -539,3 +539,66 @@ class TestModelPlanning:
                               on_event=lambda n, d: None, compose=False, planning=False,
                               ).run("What credit cards does Banque Misr offer?")
         assert result.plan_source == "keyword"
+
+
+class TestThePlannerWorksOutRelevance:
+    """A request that describes a situation, not a lookup.
+
+    The spec's example is "I travel frequently. Research the available cards
+    and recommend the most suitable option." Nobody tells the agent that
+    frequent travel implies foreign transaction fees, international limits and
+    lounge access -- working that out is the research.
+
+    The code cannot know that either, so the instruction is written in terms of
+    situations and attributes, and the module is checked for product vocabulary
+    below. The same prompt has to reason as sensibly about a small-business
+    borrowing question as about a card one.
+    """
+
+    def test_the_prompt_asks_for_the_attributes_that_matter(self):
+        from agent.planner import PROMPT
+
+        rendered = PROMPT.format(task="x", max_sub_goals=3, language_name="English")
+        assert "which attributes" in rendered
+        assert "deciding that is the research" in rendered
+
+    def test_the_planner_module_names_no_product_category(self):
+        """The one module whose job is working out what matters without a list.
+
+        A vocabulary here would be the keyword planner again, one layer up.
+        """
+        import pathlib
+        import re
+
+        source = pathlib.Path(agent_planner_path()).read_text(encoding="utf-8")
+        vocabulary = ["card", "loan", "account", "deposit", "fee", "mortgage",
+                      "credit", "atm", "travel", "lounge", "salary", "insurance"]
+        found = [w for w in vocabulary if re.search(rf"\b{w}s?\b", source, re.I)]
+        assert found == [], f"product vocabulary in the planner: {found}"
+
+    def test_a_situation_shaped_request_can_produce_several_sub_goals(self):
+        """The plumbing, not the reasoning -- reasoning needs a live model."""
+        from conftest import PLANNING_MARKER, plan_reply
+
+        plan = plan_reply(
+            "Find which products waive charges for use outside the country",
+            "Find the limits that apply when used abroad",
+            reasoning="frequent travel makes cross-border charges and limits the "
+                      "attributes that matter",
+        )
+        nav = choose_by(CARDS, CARD_LIST)
+        loop = ResearchLoop(
+            FakeLLMClient(lambda p: plan if PLANNING_MARKER in p else nav(p)),
+            fetcher=live_fetcher(), on_event=lambda n, d: None,
+            compose=False, planning=True, fallback=False)
+        result = loop.run("I travel frequently. Which option suits me best?")
+
+        assert result.plan_source == "model"
+        assert len(result.outcomes) == 2
+        assert "attributes that matter" in result.plan_reasoning
+
+
+def agent_planner_path() -> str:
+    import agent.planner
+
+    return agent.planner.__file__

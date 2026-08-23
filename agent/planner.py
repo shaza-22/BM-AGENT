@@ -11,9 +11,11 @@ Inputs / Outputs
     and the ``Plan`` is mutated only when the draft is usable.
 
 Why it is needed
-    ``person_b.planning.planner.plan_task`` decomposes by keyword: it matches
-    "credit card", "loan", "account" and otherwise emits a single sub-goal that
-    restates the task. Measured across eight varied tasks, it produced exactly
+    ``person_b.planning.planner.plan_task`` decomposes by keyword, matching a
+    fixed table of product words and otherwise emitting a single sub-goal that
+    restates the task. (Those words are quoted in ``src/person_b/PATCHES.md``
+    rather than here: this module must contain no product vocabulary, because
+    it is the module whose whole job is to work out what matters without one.) Measured across eight varied tasks, it produced exactly
     one sub-goal every time -- so a plan panel showed one restated line, and
     "planning" was a word for string interpolation.
 
@@ -86,15 +88,26 @@ Break this into the sub-goals needed to answer it. An agent will navigate the
 bank's website from its homepage for each one, separately, and each sub-goal
 should be answerable from a single page.
 
+When the request describes a situation rather than naming what to look up,
+work out for yourself which attributes of a product would actually matter to
+someone in that situation, and make those the sub-goals. Nobody will tell you
+which attributes are relevant — deciding that is the research.
+
+For example, a request that mentions how the person will use something implies
+particular attributes to compare; a request that mentions a constraint they are
+under implies the terms and requirements that bear on it. Name the attributes
+in the sub-goals so the agent knows what it is looking for.
+
 Rules:
 - Use as few sub-goals as the request needs. One is correct and expected when
   the request asks for one thing — do not split a simple lookup to look busy.
 - At most {max_sub_goals}. Every extra sub-goal costs a full walk of the site.
 - Each must be a self-contained question. The agent navigating it sees only
   that question, not the original request and not the other sub-goals.
-- Only name a product if the user named it. You do not know what the site
-  lists, so "find the fees for each card" is not a sub-goal you can write —
-  "find the list of credit cards" is, and the rest follows from what it finds.
+- Only name a specific product if the user named it. You do not know what the
+  site lists, so a sub-goal that says "for each of them" is one you cannot
+  write yet — find what exists first, and what follows comes from what that
+  finds.
 - Do not add sub-goals for background, history, or context nobody asked for.
 - Write the questions in {language_name}.
 

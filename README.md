@@ -33,6 +33,7 @@ agent/
   navigator.py       the navigation loop -> NavigationResult
   loop.py            the orchestrator: plan -> navigate each sub-goal -> answer
   planner.py         decomposing a task into sub-goals with the model
+  extraction.py      reading a page with the model when keywords find nothing
   acceptance.py      the acceptance gate: a second opinion on "resolved"
   answer.py          composing the final prose from verified claims only
   grounding.py       striking any generated sentence the evidence lacks
@@ -869,6 +870,62 @@ discarding the evidence wastes work already paid for. So the loop keeps going
 and keeps the partial: if nothing resolves, the answer is synthesised from
 accumulated partials with the gaps named.
 
+## When keyword extraction finds nothing
+
+The vendored extraction is keyword matching, and every visible failure of this
+system fell out of that one property:
+
+| symptom | cause |
+|---|---|
+| Arabic resolves nothing | no Arabic keywords |
+| the fees hub reads as not-found | page says "Fees and Rates", question said "fees and charges" |
+| a green tick above "no verified facts" | resolved on product names, extracted no field |
+| the answer reads as a flat list | only literal restatements survive |
+
+Adding Arabic to a keyword table would fix Arabic questions that happen to use
+those exact words. `agent/extraction.py` is the general fix: when the
+deterministic path yields nothing usable, the model reads the page.
+
+Measured on the Arabic accounts page, deterministic extraction returns
+`entities: 0, tables: 0, sections: 0, fields: 0` — while the page text itself
+decodes perfectly. The text was never the problem; reading it was. A model
+reading a page needs no vocabulary, so this is language-agnostic,
+paraphrase-tolerant, and able to read prose rather than only tables.
+
+### The label may be written, the value may not
+
+The label is the model's — that is exactly how "Fees and Rates" on a page
+bridges to "fees and charges" in a question. The **value** must be on the page
+verbatim. Anything failing that is **discarded, never repaired**: repairing it
+would be this layer deciding what the page meant.
+
+The check is not a plain substring test. A page saying `EGP 2500` would pass a
+model's `250` as a substring — a figure wrong by a factor of ten, with a
+citation attached. Matches must end where a token ends.
+
+### Cost, and when it fires
+
+One call per sub-goal at most, at the outcome boundary, on the best page that
+navigation saw. Not inside `validate_fn` — the navigator calls that for every
+page it fetches, which would have made it one call per page. It fires only
+where the deterministic path actually failed, never speculatively, and not at
+all for a run that never left the seed.
+
+    typical 2-sub-goal task     6-8 calls of 12
+    both sub-goals fall through 7
+    worst case                  12, where the budget stops it
+
+### Telling the two failures apart
+
+They look identical from outside and need opposite responses, so the log makes
+them different:
+
+- `extraction fallback: 0 facts offered` — the page does not answer the
+  question. Often the correct answer.
+- `found N fact(s) and kept NONE — formatting mismatch, not an empty page` —
+  the model reformatted the values instead of copying them. **This system's
+  problem**, and the rejected values are named.
+
 ## Writing the answer
 
 The vendored synthesis is template-based with no model in it — zero quota, no
@@ -920,12 +977,54 @@ Measured against a real claim set:
 | "Banque Misr is Egypt's second largest bank." | struck — no anchor |
 | "Penalty for delay is EGP 250." | struck — real label, wrong real value |
 
+### Three tiers, three warranties
+
+The spec asks the agent to analyse, compare and summarise. Analysis means
+**derived** statements: *"issuance and renewal are both EGP 250, so the cost
+does not rise after the first year"* is written on no page, though both figures
+are.
+
+| tier | what it is | whose warranty |
+|---|---|---|
+| **fact** | restated from a page | the bank's |
+| **analysis** | a comparison, total, pattern or summary | figures the bank's, **inference the agent's** |
+| **judgment** | a recommendation or verdict | premises the bank's, **opinion the agent's** |
+
+Measured before building it: today's grounding rules already keep good analysis
+and still strike invented figures, recombination and ungrounded opinion.
+Analysis was missing because the *prompt* forbade it. So the prompt changed and
+**`agent/grounding.py` did not** — every figure in tier 2 or 3 goes through
+exactly the check tier 1 does.
+
+It costs **no extra model call**: the tiers are the shape the existing
+composition reply takes.
+
+Analysis fires wherever facts support it. Judgment only where the task asks to
+be advised — and that is decided **in code, not by the prompt**. A prompt asks;
+a guard clause guarantees, and a model handed a fee question will sometimes
+volunteer a recommendation. Unasked-for judgment sentences are dropped rather
+than relabelled, because calling one "analysis" would hide it behind the wrong
+badge. Zero facts → neither tier runs.
+
+The interface writes the distinction into the block — *"The agent's reading —
+worked out from the facts above, not stated on any page"* — rather than
+carrying it by colour, which fails in a screenshot and for a colour-blind
+reader. The verification line says what the bar covers: figures are checked in
+all three tiers, the reasoning never is.
+
 ### What it does not catch
 
 **Recombination beyond the label check.** A model that pairs a real label with
 a different real value from the same page in a form the pair rule misses will
 pass. This raises the cost of a hallucination; it is not proof of correctness,
 and the README says so rather than letting the bar imply otherwise.
+
+**Analysis widens that surface, deliberately.** A derived sentence combines
+figures by design, so a wrong combination has more room to look right than a
+restatement does. Every figure in it is still checked; the reasoning joining
+them is not, and no check here can be. That is what the tier label on screen is
+for — the reader is told which sentences carry the bank's warranty and which
+carry the agent's.
 
 ## What "verified" means on screen
 
@@ -1000,7 +1099,21 @@ No `PYTHONPATH` is needed for either: see `_bootstrap.py`.
   the cases that produced *wrong verdicts*, but the structure remains: delete
   the word "card" from `src/person_b/` and it stops working. This half holds
   the opposite constraint. Listed in full at the end of `PATCHES.md`.
-- **Arabic is not supported end to end, and this is a known limitation.**
+- **Arabic: extraction should now work, the prose is thinner.** The fallback
+  reads Arabic pages as text, so facts can be extracted where the keyword path
+  found none, and the scaffolding vocabulary in `agent/grounding.py` now covers
+  Arabic so connective sentences survive. What remains English-coupled: the
+  vendored layer's own output strings ("Information not available on Banque
+  Misr website") and its English-only superlative check. Those are Person B's
+  and are documented rather than patched. **Untested against a live Arabic
+  run** — expect extraction to work and the wording to be plainer than English.
+- **The topic gate is ASCII-only.** An Arabic question yields no tokens, so the
+  gate passes everything. Not a blocker, but no protection either.
+- **Superseded:** the note below described the state before the extraction
+  fallback landed. Kept because the failure it describes is still what happens
+  with `LLM_EXTRACTION_FALLBACK = False`.
+
+- **Arabic without the fallback is not supported end to end.**
   Everything on this side handles it: the task's script is detected, the Arabic
   seed is fetched, Arabic links are ranked and followed, the reasoning is
   written in Arabic and the interface renders it right-to-left per string.
