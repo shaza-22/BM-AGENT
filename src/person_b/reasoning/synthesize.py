@@ -47,13 +47,22 @@ def synthesize(
             if entities and len(entities) >= 3:
                 card_names = [e["name"] for e in entities if e.get("name")]
                 if card_names:
-                    statement = f"Banque Misr offers the following credit cards: {', '.join(card_names[:8])}."
+                    # --- PATCH 15 (vendor) ----------------------------------
+                    # Was: f"Banque Misr offers the following credit cards: ..."
+                    # This branch fires on *any* page yielding 3+ entities, so
+                    # a loans or accounts run produced a final answer that read
+                    # "Banque Misr offers the following credit cards: Personal
+                    # Loans, ...". A wrong noun in the delivered answer is worse
+                    # than a bland one, and this was the only place the answer
+                    # text named a product category it had not established.
+                    # --- END PATCH 15 ---
+                    statement = f"Banque Misr lists the following: {', '.join(card_names[:8])}."
                     if statement not in seen_statements:
                         seen_statements.add(statement)
                         c = Claim(
                             id=f"c_{uuid.uuid4().hex[:8]}",
                             statement=statement,
-                            field="credit_cards_list",
+                            field="entity_list",  # PATCH 15: was "credit_cards_list"
                             value=", ".join(card_names[:8]),
                             source_url=src_url,
                         )

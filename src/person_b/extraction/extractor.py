@@ -20,15 +20,22 @@ from person_b.models import (
 )
 
 
-# Known repeated global navigation boilerplate marker phrases
-_NAV_START_MARKERS = [
-    "ie ??? ????",
-    "history",
-    "board members",
-    "bm historical website",
-    "banque misr foundation",
-    "chatbot and live chat services",
-]
+# --- PATCH 1 (vendor) -------------------------------------------------------
+# Removed _NAV_START_MARKERS. Two reasons:
+#
+#   1. It was dead code. The list was defined here but never read -- only
+#      _FOOTER_START_MARKERS is used by preprocess_cleaned_text(), so the
+#      nav half of the intended boilerplate stripping was never wired up.
+#   2. Its first entry was the literal string "ie ??? ????" -- a mangled
+#      Arabic phrase, i.e. text that had already lost its encoding before it
+#      was pasted in as a constant. Matching on it could only ever be
+#      accidental, and it is the same mojibake that makes this module's
+#      Arabic handling a known gap.
+#
+# Nothing referenced it, so deleting it is behaviour-preserving; it is
+# recorded rather than silently dropped so a future drop from Person B can be
+# checked for the same constant.
+# --- END PATCH 1 ---
 
 _FOOTER_START_MARKERS = [
     "link has been copied",

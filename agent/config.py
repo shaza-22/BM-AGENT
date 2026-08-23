@@ -210,3 +210,36 @@ WAF_BLOCK_MARKERS: tuple[str, ...] = (
     "access denied",
 )
 WAF_MAX_LINKS = 5
+
+
+# --- Multi-sub-goal loop budgets -------------------------------------------
+# Caps for agent/loop.py, which drives Person B's plan across several
+# navigations. These override PersonBConfig at construction time; their
+# defaults are deliberately left untouched in src/person_b/config.py so a
+# future drop from them re-vendors cleanly (see src/person_b/VENDORED.md).
+#
+# Their shipped default is max_expansion_sub_goals = 20. That is unusable
+# here. Measured on the fixtures, their extractor pulls 12 entities off the
+# credit-cards list page, and expansion turns each into its own sub-goal: 12
+# fresh navigations of up to MAX_PAGES pages each is roughly 180 requests at a
+# site behind an F5 WAF that bans on burst traffic, and 12+ model calls
+# against a free tier that allows 20 per day. The plan would exhaust the
+# quota before the first answer.
+#
+# The per-sub-goal caps above (MAX_HOPS, MAX_PAGES) do not bound this on their
+# own -- they multiply. The two budgets that actually hold the line are the
+# global ones, which are spent across the whole plan rather than reset per
+# sub-goal.
+MAX_SUB_GOALS = 4  # 1 initial + 3 expansions
+MAX_EXPANSION_DEPTH = 1  # an expanded sub-goal never expands again
+LOOP_MAX_PAGES = 25  # GLOBAL across all sub-goals, not per sub-goal
+LOOP_MAX_LLM_CALLS = 12  # hard stop well inside a 20/day free tier
+
+# A partial verdict does not stop navigation. "Partial" means the entity is
+# relevant and some requested fields were found -- precisely the state where
+# the rest is one hop deeper, on a detail page or a linked PDF. Stopping there
+# throws away the remaining hop budget; discarding the evidence throws away
+# work already paid for. So the loop keeps navigating and keeps the partial as
+# a fallback: if nothing resolves, the answer is synthesised from accumulated
+# partials with the gaps named, which beats reporting a flat failure.
+PARTIAL_STOPS_NAVIGATION = False

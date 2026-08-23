@@ -67,10 +67,22 @@ Their suite lives at `tests/person_b_vendor/`. Two changes were needed:
   their own conftest failed to import. The suffix is the whole fix; their
   `__init__.py` files are kept exactly as shipped.
 
-### 5. `examples/person_a_integration_smoke.py`
+### 5. `examples/person_a_integration_smoke.py` — written, not stricken
 
-Referenced by `README.md:599`, `docs/PERSON_B_HANDOFF.md:38` and `:118`, and
-`docs/tasks/TASK_04_...md:260` — **but absent from the zip**. See `PATCHES.md`.
+Referenced by their `README.md:599`, `docs/PERSON_B_HANDOFF.md:38` and `:118`,
+and `docs/tasks/TASK_04_...md:260` — **but absent from the zip**. Their handoff
+points at it as the first thing to run.
+
+It is written here at the referenced path rather than striking the references,
+so their docs stop lying and a one-command offline check exists. It drives the
+full contract — `plan_task -> validate -> apply_validation -> expand_plan ->
+synthesize -> validate_answer -> finalize` — over `fixtures/live/`, with no
+network and no model, and exits non-zero if any stage breaks shape:
+
+    python examples/person_a_integration_smoke.py
+
+Their docs are vendored at `docs/person_b/`. A future drop that ships its own
+`examples/` should replace this file.
 
 ### 6. Behavioural patches
 

@@ -42,14 +42,43 @@ def _extract_requested_fields(task_text: str) -> List[str]:
         fields.append("limits")
     if "interest" in lower or "installment" in lower or "rate" in lower:
         fields.append("interest_rate")
-    if "eligibility" in lower or "requirement" in lower or "document" in lower:
+    # --- PATCH 10 (vendor) --------------------------------------------------
+    # Dropped the bare "document" trigger. A person who says "show me the fees
+    # and rates document" is asking for a file, not for eligibility paperwork,
+    # but this added "eligibility" to the required fields and the validator
+    # then refused to resolve the page that held the document. Same failure
+    # shape as PATCH 2: a requirement the user never stated becoming part of
+    # the pass condition. "documents required"-style questions still land here
+    # via "requirement".
+    if "eligibility" in lower or "requirement" in lower:
         fields.append("eligibility")
+    # --- END PATCH 10 ---
+    # --- PATCH 2 (vendor) ---------------------------------------------------
+    # Was:
+    #     if not fields:
+    #         if "card" in lower or "compare" in lower:
+    #             fields = ["fees", "benefits"]
+    #         else:
+    #             fields = ["overview"]
+    #
+    # The `"card" in lower` half invented "fees" and "benefits" for any task
+    # merely containing the word "card". The validator then required both
+    # before it would resolve, so an open question like "Tell me about Banque
+    # Misr payment cards" could only ever come back PARTIAL -- the page
+    # answered what was asked and was rejected for not answering two things
+    # nobody asked. It was also the only category vocabulary in this function.
+    #
+    # The `"compare" in lower` half is kept: a comparison with no stated
+    # dimension genuinely needs axes to compare on, and "fees, benefits" is a
+    # reasonable default there. Narrowing rather than deleting also keeps their
+    # test_dynamic_plan_expansion passing on its exact expected sub-goal text.
     if not fields:
-        if "card" in lower or "compare" in lower:
+        if "compare" in lower:
             fields = ["fees", "benefits"]
         else:
             fields = ["overview"]
     return fields
+    # --- END PATCH 2 ---
 
 
 def plan_task(user_task: str, config: Optional[PersonBConfig] = None) -> Plan:
