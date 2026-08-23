@@ -19,14 +19,38 @@ from person_b.models import (
 def _classify_task_type(task_text: str) -> TaskType:
     """Classify user task into standard TaskType enum based on intent keywords."""
     lower = task_text.lower()
-    if any(w in lower for w in ("compare", "difference", "vs", "versus", "better than", "comparison")):
+    if any(w in lower for w in ("compare", "difference", "vs", "versus", "better than", "comparison",
+                                # --- PATCH 18 (vendor) ---------------------
+                                # "Which is better, a personal loan or a car
+                                # loan?" matched none of the originals --
+                                # "better than" needs the word "than" -- so it
+                                # fell through to GENERAL. Downstream, task
+                                # type is what decides whether a plan may fan
+                                # out to several entities, and this is a
+                                # comparison that must.
+                                "better", "which is worse", " or a ", " or an ")):
         return TaskType.COMPARISON
-    elif any(w in lower for w in ("recommend", "best", "suggest", "which card", "should i get", "suitable for")):
+    elif any(w in lower for w in ("recommend", "best", "suggest", "should i get", "suitable for",
+                                  # PATCH 18: "which card" was the only
+                                  # category-specific token in this function
+                                  # and only ever matched one product line.
+                                  "which account", "which loan", "which one",
+                                  "best for", "right for me")):
         return TaskType.RECOMMENDATION
     elif any(w in lower for w in ("what is", "how much", "find fee", "issuance fee", "grace period", "limit of")):
         return TaskType.LOOKUP
-    elif any(w in lower for w in ("all", "list", "every", "steps", "guide")):
+    # --- PATCH 18 (vendor) --------------------------------------------------
+    # Was: any(w in lower for w in ("all", "list", "every", "steps", "guide")).
+    # Bare "list" is a noun at least as often as a verb -- "where can I find the
+    # branch list?" is a single lookup, and classifying it MULTI_HOP made the
+    # plan fan out to every entity on the page it landed on. MULTI_HOP now
+    # needs the enumerate-*and*-detail sense: several things, each with an
+    # attribute, which is the only reading that genuinely needs several pages.
+    elif any(w in lower for w in ("list all", "list every", "show me all", "show me every",
+                                  "all the", "each of", "for each", "every one",
+                                  "and their", "and its ", "steps", "guide")):
         return TaskType.MULTI_HOP
+    # --- END PATCH 18 ---
     return TaskType.GENERAL
 
 

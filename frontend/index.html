@@ -364,9 +364,15 @@ function showAnswer(d) {
   const sources = (d.source_urls || []).map(
     (u) => `<li><a href="${esc(u)}" target="_blank" rel="noopener">${esc(u)}</a></li>`).join("");
 
+  // What the bar means depends on how the answer was produced, so the label
+  // changes with it rather than implying one warranty for both.
+  //
   // support_rate is 1.0 when nothing was claimed, which would read as "fully
   // supported". With no claims there is nothing to be supported, so the bar is
   // replaced by a plain statement rather than a reassuring green line.
+  const composed = d.answer_source === "composed";
+  const g = (d.composition && d.composition.grounding) || null;
+
   let support;
   if (!d.claims_total) {
     support = `<div class="support">No verifiable claims were extracted, ` +
@@ -375,18 +381,41 @@ function showAnswer(d) {
     const pct = Math.round((d.support_rate || 0) * 100);
     const cls = pct === 100 ? "" : (pct >= 50 ? "warn" : "bad");
     support =
-      `<div class="support"><span>Verified against pages this run fetched:</span>` +
+      `<div class="support">` +
+      `<span>Facts whose value was found on the page they cite:</span>` +
       `<span class="bar ${cls}"><i style="width:${pct}%"></i></span>` +
-      `<span>${d.claims_supported}/${d.claims_total} claims (${pct}%)</span></div>` +
+      `<span>${d.claims_supported}/${d.claims_total} (${pct}%)</span></div>` +
       (pct < 100 ? `<div class="caveat">Unsupported statements were removed from the ` +
                    `answer above rather than shown with sources beneath them.</div>` : "");
+  }
+
+  // How the wording was produced. A template answer is assembled from the
+  // extracted values and cannot say anything they do not; a composed one was
+  // written by the model and had every sentence checked against those values.
+  // Saying which is the difference between "verified" meaning two things.
+  let provenance = "";
+  if (composed && g) {
+    provenance =
+      `<div class="caveat"><b>Written by the model</b> from ${d.composition.claims_offered} ` +
+      `verified facts. Every figure was checked against them` +
+      (g.sentences_struck
+        ? `; ${g.sentences_struck} of ${g.sentences_total} sentence(s) were removed for ` +
+          `saying something the evidence does not: ` +
+          esc(g.struck.map((s) => s.reason.replace(/\.$/, "")).join("; "))
+        : ` and all ${g.sentences_total} sentence(s) passed`) + `.</div>`;
+  } else if (d.composition && d.composition.attempted && !d.composition.used) {
+    provenance = `<div class="caveat"><b>Showing the extracted values.</b> ` +
+      `A written answer was attempted and discarded: ${esc(d.composition.reason)}.</div>`;
+  } else if (d.claims_total) {
+    provenance = `<div class="caveat"><b>Showing the extracted values</b> exactly as they ` +
+      `appear on the page — no wording was generated.</div>`;
   }
 
   $("final").innerHTML =
     `<div class="panel verdict ${d.resolved_count ? "v-ok" : "v-none"}">` +
       `<h2>${d.resolved_count ? "Answer" : "No answer found"}</h2>` +
       `<div class="answer" dir="auto">${esc(d.answer || "")}</div>` +
-      support +
+      support + provenance +
       (d.budget_exhausted ? `<div class="caveat">Stopped early: ${esc(d.budget_exhausted)}. ` +
         `Sub-goals left unvisited are listed below.</div>` : "") +
       (d.gate_rejections ? `<div class="caveat">${d.gate_rejections} page(s) were accepted by the ` +
@@ -455,6 +484,7 @@ function startPolling(taskId) {
     const s = await r.json();
     if (s.sub_goal) showResolved({ ...s, task: s.task });
     if (s.plan) showPlan(s.plan);
+    if (s.answer) showAnswer(s.answer);
     (s.sub_goals || []).forEach(subGoalFinished);
     (s.gate_events || []).forEach(showGate);
     (s.hops || []).forEach(addHop);

@@ -188,9 +188,30 @@ class AnswerVerifiedEvent(BaseModel):
     prose_removed: list[str] = Field(default_factory=list)
 
 
+class AnswerComposedEvent(BaseModel):
+    """Whether the final wording was written by the model, and what was struck.
+
+    Emitted even when composition was declined, because *why* it was declined
+    is the interesting case: "no verified claims" means the run refused to let
+    a model write about a bank with nothing to go on.
+    """
+
+    attempted: bool = False
+    used: bool = False
+    reason: str = ""
+    claims_offered: int = 0
+    grounding: dict[str, Any] | None = None
+
+
 class AnswerEvent(BaseModel):
     """The finished, verified answer."""
 
+    # "template" -- assembled from extracted values by the vendored, model-free
+    # synthesis. "composed" -- written by the model from the verified claims and
+    # then put through agent/grounding.py. The interface says which, because the
+    # two do not carry the same warranty.
+    answer_source: str = "template"
+    composition: AnswerComposedEvent | None = None
     answer: str = ""
     source_urls: list[str] = Field(default_factory=list)
     not_found: list[str] = Field(default_factory=list)
@@ -245,6 +266,7 @@ class TaskStatus(BaseModel):
     sub_goals: list[SubGoalFinishedEvent] = Field(default_factory=list)
     gate_events: list[GateEvent] = Field(default_factory=list)
     verification: AnswerVerifiedEvent | None = None
+    answer: AnswerEvent | None = None
 
 
 class HealthResponse(BaseModel):

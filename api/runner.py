@@ -65,6 +65,7 @@ from api.replay import REPLAY_EVENT_DELAY_S, find_recording, save_run
 from browsing import config as browsing_config
 from browsing.language import detect_language
 from api.schemas import (
+    AnswerComposedEvent,
     AnswerEvent,
     AnswerVerifiedEvent,
     DoneEvent,
@@ -157,6 +158,7 @@ class TaskRecord:
             hops=list(self.hops),
             result=self.result,
             error=self.error,
+            answer=self.answer,
             plan=self.plan,
             sub_goals=list(self.sub_goals),
             gate_events=list(self.gate_events),
@@ -394,6 +396,8 @@ class TaskRegistry:
                 elif name == "answer_verified":
                     record.verification = AnswerVerifiedEvent(**data)
                     data = record.verification.model_dump()
+                elif name == "answer_composed":
+                    data = AnswerComposedEvent(**data).model_dump()
             except Exception:
                 # A malformed payload is worth a log and a dropped panel, never
                 # a failed run: the navigation itself is the expensive part.
@@ -431,6 +435,9 @@ class TaskRegistry:
             return
 
         answer = AnswerEvent(
+            answer_source=loop_result.answer_source,
+            composition=(AnswerComposedEvent(**loop_result.composition)
+                         if loop_result.composition else None),
             answer=loop_result.answer,
             source_urls=list(loop_result.source_urls),
             not_found=list(loop_result.not_found),
@@ -444,6 +451,7 @@ class TaskRegistry:
         )
         record.answer = answer
         self._publish(record, "answer", answer.model_dump())
+
 
         done = DoneEvent(
             status="resolved" if loop_result.resolved_count else "exhausted",

@@ -33,6 +33,8 @@ agent/
   navigator.py       the navigation loop -> NavigationResult
   loop.py            the orchestrator: plan -> navigate each sub-goal -> answer
   acceptance.py      the acceptance gate: a second opinion on "resolved"
+  answer.py          composing the final prose from verified claims only
+  grounding.py       striking any generated sentence the evidence lacks
   trail_log.py       JSON Lines step log for the frontend and evaluation
 src/person_b/        VENDORED intelligence layer (planning, extraction,
                      validation, reasoning, verification). Not developed here.
@@ -778,6 +780,22 @@ A task is no longer one navigation. `agent/loop.py` plans it into sub-goals,
 navigates each one **live from the seed**, expands the plan from what it finds,
 then synthesises, verifies and finalises.
 
+**Expansion is gated on task type.** `expand_plan` reads the entity list off
+whatever page resolved and makes a sub-goal per entity, without consulting the
+task — and the loop used to call it on every resolve. Measured, that turned
+*"What are the fees on the Classic credit card?"* into four sub-goals: the
+answer, then Gold, Platinum and Titanium, none of them asked for, exhausting
+the model budget and appearing under "Not found". Only comparisons,
+recommendations and enumerate-and-detail tasks fan out; the gate scores 23/23
+on the labelled set in `tests/test_loop.py::TestExpansionGate`, which is the
+measurement — widen it rather than adjusting the gate by feel.
+
+When a task *names* entities, expansion follows those. "Compare the Classic and
+Gold credit cards" discovers eight cards and expands to two. The words that
+discriminate are derived from the candidates each run — any word most of them
+share decides nothing — so it names no category itself and behaves identically
+on loans.
+
 Per-sub-goal caps do not bound a plan — they multiply. Measured: one
 credit-cards page expands to 13 sub-goals, which at `MAX_PAGES` each is ~180
 requests to a WAF-protected site and 13+ model calls against a 20/day free
@@ -805,11 +823,83 @@ discarding the evidence wastes work already paid for. So the loop keeps going
 and keeps the partial: if nothing resolves, the answer is synthesised from
 accumulated partials with the gaps named.
 
+## Writing the answer
+
+The vendored synthesis is template-based with no model in it — zero quota, no
+hallucination risk, and no ability to write a sentence. It fills slots. That is
+why a fee question used to come back as a list of card names.
+
+Two modules sit on top of it:
+
+- **`agent/answer.py`** asks the model for the final wording, given *only* the
+  claims the run verified — label, value, source — and nothing else.
+- **`agent/grounding.py`** then strikes every sentence the evidence does not
+  support, before anyone sees it.
+
+The template answer is produced first and stands whenever composition is
+skipped, fails, or is struck empty. Composition can improve the wording; it can
+never be the reason a run has no answer. One model call, reserved out of
+`LOOP_MAX_LLM_CALLS` so navigation cannot spend the budget and leave nothing to
+write with.
+
+### The hard rule: no claims, no call
+
+If the run verified nothing, the model is **not invited to write anything**. It
+would compose from what it happens to know about the bank, and every word would
+inherit the interface's credibility. This is a guard clause at the top of
+`compose_answer`, not a prompt instruction, because a prompt is a request and a
+guard clause is not.
+
+It covers Arabic for free: the vendored extraction cannot read Arabic pages, so
+an Arabic run produces no claims, so nothing is generated and the template
+"not found" answer stands — the visible failure, not a compensating guess.
+
+### What grounding checks
+
+1. **Every figure must be quoted.** Any number, amount or percentage must
+   appear in some claim's value.
+2. **Every sentence must be anchored.** It has to carry at least one label or
+   value from the claim set, so a fluent bridging sentence carrying no
+   checkable token ("the card has no annual fee") cannot ride along.
+3. **A label must keep its own value.** If a sentence names a fee, the figure
+   next to it must be that fee's figure.
+
+Measured against a real claim set:
+
+| generated sentence | outcome |
+|---|---|
+| "Issuance — EGP 250. Renewal — EGP 250." | kept |
+| "The annual fee is EGP 500." | struck — figure not in evidence |
+| "The Classic card has no annual fee." | struck — no checkable token |
+| "Banque Misr is Egypt's second largest bank." | struck — no anchor |
+| "Penalty for delay is EGP 250." | struck — real label, wrong real value |
+
+### What it does not catch
+
+**Recombination beyond the label check.** A model that pairs a real label with
+a different real value from the same page in a form the pair rule misses will
+pass. This raises the cost of a hallucination; it is not proof of correctness,
+and the README says so rather than letting the bar imply otherwise.
+
 ## What "verified" means on screen
 
+Their attribution used to decide support purely on *"is this claim's source URL
+in the visited set"* — and since every claim is stamped with the URL of the
+page it was built from, every claim passed. "100% verified" meant "100% of
+claims cite a page we fetched". That is patched (PATCH 17): a claim's value
+must now actually appear in the text of the page it cites, and the loop passes
+that text.
+
+The bar is labelled for what it measures — *facts whose value was found on the
+page they cite* — and the panel says which kind of answer it is sitting under,
+because a template answer and a written one do not carry the same warranty:
+
+> **Written by the model** from 35 verified facts. Every figure was checked
+> against them; 1 of 5 sentences was removed for saying something the evidence
+> does not: figure(s) not in the evidence: 900
+
 `finalize` strikes the prose of every claim that fails attribution, not only
-when all of them fail, and the UI shows `support_rate` as a bar with the raw
-count beside it. When there are no claims at all the bar is replaced by a plain
+when all of them fail. When there are no claims at all the bar is replaced by a plain
 statement — a 100% bar over zero claims would be the most reassuring lie the
 interface could tell.
 
@@ -852,6 +942,9 @@ never visited cannot survive.
   compensates for it.
 - The acceptance gate abstains on the first pages of a run, when there is not
   yet enough to compare against (see above). It is a backstop, not a first line.
+- Answer composition can be turned off with `COMPOSE_ANSWER = False`, which
+  falls back to the template wording. Worth knowing before a demo: with it off
+  the answer is accurate and reads like a lookup table.
 - The evaluation pipeline is still unbuilt. `scripts/validator_bench.py`
   measures the validator in isolation and their `PersonBEvaluator` tests their
   layer offline; neither scores end-to-end navigation.

@@ -22,11 +22,17 @@ from agent.loop import ResearchLoop, _Verdicts  # noqa: E402
 
 CARDS = "/Pages/Cards"
 CARD_LIST = "Credit%20Cards%20List"
+# A task whose answer genuinely needs several entities looked at separately, so
+# the expansion gate lets it through. A plain lookup no longer expands, which
+# is the point of TestExpansionGate below.
+EXPANDING_TASK = "Which credit card is best for travel?"
+LOOKUP_TASK = "What are the fees on the Classic credit card?"
 BOILERPLATE = "Retail Banking Corporate Banking Islamic Banking Quick Links E-Statement"
 
 
 def build(*needles: str, **kwargs) -> tuple[ResearchLoop, list]:
     events: list[tuple[str, dict]] = []
+    kwargs.setdefault("compose", False)   # navigation under test, not wording
     loop = ResearchLoop(
         FakeLLMClient(choose_by(*needles)),
         fetcher=live_fetcher(),
@@ -69,9 +75,9 @@ class TestTheHappyPath:
 
     def test_expansion_is_reported_with_what_it_added(self):
         loop, events = build(CARDS, CARD_LIST)
-        loop.run("What credit cards does Banque Misr offer?")
+        loop.run(EXPANDING_TASK)
         expansions = [d for n, d in events if n == "plan_expanded"]
-        assert expansions, "a resolved discovery sub-goal should expand the plan"
+        assert expansions, "a recommendation task should expand the plan"
         assert expansions[0]["added"], "expansion reported nothing added"
 
     def test_sources_are_only_pages_the_run_actually_fetched(self):
@@ -84,20 +90,29 @@ class TestTheHappyPath:
 class TestBudgets:
     def test_the_page_budget_is_global_not_per_sub_goal(self):
         """The whole point of the global budget: caps must not multiply."""
-        loop, events = build(CARDS, CARD_LIST, max_pages=3)
-        result = loop.run("What credit cards does Banque Misr offer?")
-        assert result.pages_used <= 3 + 1, result.pages_used
+        loop, events = build(CARDS, CARD_LIST, max_pages=2)
+        result = loop.run(EXPANDING_TASK)
+        assert result.pages_used <= 2 + 1, result.pages_used
         assert result.budget_exhausted
 
     def test_the_model_call_budget_stops_the_plan(self):
-        loop, _ = build(CARDS, CARD_LIST, max_llm_calls=2)
-        result = loop.run("What credit cards does Banque Misr offer?")
-        assert result.llm_calls_used <= 3
+        # One call: enough for the first sub-goal to resolve and expand the
+        # plan, nothing left for the sub-goal that expansion added. The budget
+        # only trips when something is still pending -- a plan that simply runs
+        # out of sub-goals has not been cut short and must not say it was.
+        loop, _ = build(CARDS, CARD_LIST, max_llm_calls=1)
+        result = loop.run(EXPANDING_TASK)
+        assert result.llm_calls_used <= 2
         assert "model-call budget" in (result.budget_exhausted or "")
 
+    def test_a_plan_that_simply_finishes_is_not_reported_as_cut_short(self):
+        loop, _ = build(CARDS, CARD_LIST)
+        result = loop.run(LOOKUP_TASK)
+        assert result.budget_exhausted is None
+
     def test_sub_goals_dropped_for_budget_say_so(self):
-        loop, events = build(CARDS, CARD_LIST, max_pages=3)
-        result = loop.run("What credit cards does Banque Misr offer?")
+        loop, events = build(CARDS, CARD_LIST, max_pages=2)
+        result = loop.run(EXPANDING_TASK)
         dropped = [o for o in result.outcomes if o.status == "not_available"
                    and "budget" in o.reason]
         assert dropped, "the plan stopped for budget without naming the sub-goals it skipped"
@@ -107,12 +122,12 @@ class TestBudgets:
 
     def test_the_plan_never_exceeds_the_sub_goal_cap(self):
         loop, _ = build(CARDS, CARD_LIST, max_sub_goals=2)
-        result = loop.run("What credit cards does Banque Misr offer?")
+        result = loop.run(EXPANDING_TASK)
         assert len(result.outcomes) <= 2
 
     def test_an_expanded_sub_goal_does_not_expand_again(self):
         loop, events = build(CARDS, CARD_LIST, max_expansion_depth=1)
-        loop.run("What credit cards does Banque Misr offer?")
+        loop.run(EXPANDING_TASK)
         parents = [d["parent_id"] for n, d in events if n == "plan_expanded"]
         assert len(set(parents)) <= 1, "expansion recursed past its depth cap"
 
@@ -272,3 +287,113 @@ class TestPartialPolicy:
             "partial means the rest is one hop deeper; stopping there throws "
             "away the remaining hop budget"
         )
+
+
+class TestExpansionGate:
+    """A task only fans out when answering it needs several entities.
+
+    ``expand_plan`` reads the entity list off whatever page resolved and makes
+    a sub-goal per entity, without consulting the task. Called on every resolve
+    -- which is what this loop used to do -- a single-entity fee question
+    became four sub-goals: the answer, then Gold, Platinum and Titanium, none
+    of them asked for, spending the model budget and appearing under
+    "Not found".
+
+    The gate is the task type. This is the labelled set behind that choice; it
+    is the measurement, so widen it rather than adjusting the gate by feel.
+    """
+
+    # (task, should_expand)
+    CASES = [
+        # Single-entity lookups. One page answers these.
+        ("What are the fees on the Classic credit card?", False),
+        ("What is the annual fee for the Classic credit card?", False),
+        ("How much does the Gold card cost?", False),
+        ("What is the grace period on the Classic card?", False),
+        ("What is the interest rate on the Titanium card?", False),
+        ("What is the daily ATM withdrawal limit?", False),
+        # How-to and location questions.
+        ("How do I open an Islamic account?", False),
+        ("How do I activate my debit card at the ATM?", False),
+        ("Where is the schedule of fees and commissions?", False),
+        ("Where can I find the branch list?", False),
+        # Open questions answered by one hub page.
+        ("What credit cards does Banque Misr offer?", False),
+        ("What personal loans are available?", False),
+        ("Tell me about Banque Misr payment cards", False),
+        ("What accounts and deposits does the bank offer?", False),
+        # Comparisons.
+        ("Compare the Classic and Gold credit cards", True),
+        ("What is the difference between the Titanium and Platinum cards?", True),
+        ("Classic vs Gold credit card", True),
+        ("Which is better, a personal loan or a car loan?", True),
+        # Recommendations.
+        ("Which card is best for travel?", True),
+        ("Recommend a card for online shopping", True),
+        ("Which account should I get for my salary?", True),
+        # Enumerate-and-detail.
+        ("List all the credit cards and their annual fees", True),
+        ("Show me every loan and its interest rate", True),
+    ]
+
+    @pytest.mark.parametrize("task,should_expand", CASES)
+    def test_the_gate_matches_the_label(self, task: str, should_expand: bool) -> None:
+        from person_b.api import plan_task
+
+        plan = plan_task(task)
+        gated = plan.goal.task_type in ResearchLoop.EXPANDING_TASK_TYPES
+        assert gated is should_expand, (
+            f"{task!r} classified {plan.goal.task_type!r}; "
+            f"expansion would be {gated}, labelled {should_expand}"
+        )
+
+    def test_a_direct_lookup_produces_exactly_one_sub_goal(self):
+        """The regression this whole gate exists for."""
+        loop, _ = build(CARDS, CARD_LIST, "Classic%20Credit%20Cards")
+        result = loop.run(LOOKUP_TASK)
+        assert len(result.outcomes) == 1, [o.question for o in result.outcomes]
+        assert result.budget_exhausted is None
+
+
+class TestNamedEntityNarrowing:
+    """Expansion follows the entities the task named, when it named any."""
+
+    CARDS_FOUND = [
+        "Classic Credit Card", "Gold Credit Card", "Platinum Visa - MasterCredit Card",
+        "Titanium Credit Card", "Visa Infinite", "World Credit Card",
+    ]
+    LOANS_FOUND = ["Personal Loans", "Car Loans", "Mortgage Finance", "Payroll Loans"]
+
+    def test_a_named_comparison_expands_only_to_those_entities(self):
+        from agent.loop import _entities_named_by
+
+        named = _entities_named_by("Compare the Classic and Gold credit cards", self.CARDS_FOUND)
+        assert sorted(named) == ["Classic Credit Card", "Gold Credit Card"]
+
+    def test_words_shared_by_most_candidates_do_not_single_anything_out(self):
+        """"credit" and "card" are on nearly every candidate and decide nothing.
+
+        The stop set is derived from the candidates each run rather than
+        written down, which is what keeps this free of category vocabulary --
+        and why it behaves identically on loans.
+        """
+        from agent.loop import _entities_named_by
+
+        assert _entities_named_by("Which credit card is best?", self.CARDS_FOUND) == []
+        assert sorted(_entities_named_by("Compare car loans and personal loans",
+                                         self.LOANS_FOUND)) == ["Car Loans", "Personal Loans"]
+
+    def test_one_outlier_name_cannot_defeat_the_stop_set(self):
+        """"Visa Infinite" omits "credit"/"card"; majority presence, not all."""
+        from agent.loop import _entities_named_by
+
+        assert "Titanium Credit Card" not in _entities_named_by(
+            "Compare the Classic and Gold credit cards", self.CARDS_FOUND)
+
+    def test_an_open_task_still_expands_to_everything(self):
+        from agent.loop import ResearchLoop
+
+        verdict = {"resolved": True,
+                   "extracted": {"entities": [{"name": n} for n in self.CARDS_FOUND]}}
+        same = ResearchLoop._narrow_to_named_entities(verdict, "Which card is best for travel?")
+        assert len(same["extracted"]["entities"]) == len(self.CARDS_FOUND)

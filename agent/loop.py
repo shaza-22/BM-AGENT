@@ -51,12 +51,14 @@ Partial verdicts do not stop navigation
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
 from agent import config
 from agent.acceptance import AcceptanceGate, GateDecision, gate_from_config
+from agent.answer import compose_answer
 from agent.llm import LLMClient, LLMError
 from agent.navigator import NavigationResult, Navigator
 from agent.trail_log import StepLogger
@@ -119,6 +121,12 @@ class LoopResult:
     budget_exhausted: str | None = None
     gate_rejections: int = 0
     elapsed_s: float = 0.0
+    # How the answer text was produced, and what grounding did to it. Kept so
+    # the interface can say which it is showing rather than implying prose and
+    # template carry the same warranty.
+    answer_source: str = "template"          # "template" | "composed"
+    composition: dict[str, Any] | None = None
+    template_answer: str = ""
     # Every hop of every sub-goal, in order. Kept so the session can summarise
     # a turn without the loop having to hand back page content.
     trail: list[Any] = field(default_factory=list)
@@ -154,9 +162,52 @@ class LoopResult:
             "blocked_reason": self.blocked_reason,
             "error_reason": self.error_reason,
             "gate_rejections": self.gate_rejections,
+            "answer_source": self.answer_source,
+            "composition": self.composition,
+            "template_answer": self.template_answer,
             "resolved_count": self.resolved_count,
             "elapsed_s": round(self.elapsed_s, 2),
         }
+
+
+def _words(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9]+", (text or "").lower()) if len(w) > 2}
+
+
+def _entities_named_by(task: str, names: list[str]) -> list[str]:
+    """Which of these entity names does the task actually single out?
+
+    The discriminating words are derived from the candidates themselves rather
+    than from a list: any word shared by *every* discovered entity says nothing
+    about which one is meant. Given eight cards, "credit" and "card" are shared
+    and drop out, leaving "classic", "gold", "titanium" and so on -- so
+    "Compare the Classic and Gold credit cards" singles out two of the eight.
+
+    Deriving the stop set per run is what keeps this topic-agnostic: it holds
+    identically for loans, accounts or anything else the site lists, and names
+    no category itself.
+    """
+    if len(names) < 2:
+        return []
+    per_name = {name: _words(name) for name in names}
+
+    # A word carries no discriminating power when most of the candidates have
+    # it. Not *all* of them: one outlier name ("Visa Infinite") that happens to
+    # omit the common noun would otherwise keep "credit" and "card" in play,
+    # and then every card matches a task mentioning cards at all. Majority
+    # presence is the test, so a single outlier cannot defeat it.
+    frequency: dict[str, int] = {}
+    for words in per_name.values():
+        for word in words:
+            frequency[word] = frequency.get(word, 0) + 1
+    threshold = len(per_name) / 2
+    shared = {word for word, count in frequency.items() if count > threshold}
+
+    task_words = _words(task)
+    return [
+        name for name, words in per_name.items()
+        if (words - shared) & task_words
+    ]
 
 
 _VERDICT_RANK = {"resolved": 3, "partial": 2, "unreadable": 1, "unresolved": 0}
@@ -226,6 +277,7 @@ class ResearchLoop:
         max_pages: int = config.LOOP_MAX_PAGES,
         max_llm_calls: int = config.LOOP_MAX_LLM_CALLS,
         max_expansion_depth: int = config.MAX_EXPANSION_DEPTH,
+        compose: bool | None = None,
     ) -> None:
         self._llm = _CountingLLM(llm)
         self._fetcher = fetcher
@@ -237,6 +289,7 @@ class ResearchLoop:
         self._max_pages = max_pages
         self._max_llm_calls = max_llm_calls
         self._max_expansion_depth = max_expansion_depth
+        self._compose = config.COMPOSE_ANSWER if compose is None else compose
 
         self._pages_used = 0
         self._page_text: dict[str, str] = {}
@@ -261,8 +314,13 @@ class ResearchLoop:
     def _exhausted(self) -> str | None:
         if self._pages_used >= self._max_pages:
             return f"page budget spent ({self._pages_used}/{self._max_pages})"
-        if self._llm.calls >= self._max_llm_calls:
-            return f"model-call budget spent ({self._llm.calls}/{self._max_llm_calls})"
+        # Navigation stops one call early when composition is on, so the run
+        # always has a call left to write the answer with. Spending the last
+        # call on a hop and then having no budget to phrase the result is the
+        # wrong trade: the hop might find nothing, the answer is certain.
+        navigation_budget = self._max_llm_calls - (1 if self._compose else 0)
+        if self._llm.calls >= navigation_budget:
+            return f"model-call budget spent ({self._llm.calls}/{navigation_budget})"
         return None
 
     # -- the validate_fn seam ---------------------------------------------
@@ -423,7 +481,8 @@ class ResearchLoop:
 
             if outcome.status == "resolved" and self._may_expand(plan, sub_goal):
                 before = len(plan.sub_goals)
-                expand_plan(plan, outcome.verdict, pb_config)
+                expand_plan(plan, self._narrow_to_named_entities(outcome.verdict, task),
+                            pb_config)
                 added = plan.sub_goals[before:]
                 for sg in added:
                     sg.metadata["expansion_depth"] = (
@@ -536,10 +595,55 @@ class ResearchLoop:
         )
 
     # -- plan bookkeeping --------------------------------------------------
+    # Task types whose answer genuinely requires investigating several entities
+    # separately. Everything else -- a lookup, a how-to, a single-entity fee
+    # question -- is answered by one page and must not fan out.
+    EXPANDING_TASK_TYPES = frozenset({"comparison", "recommendation", "multi_hop"})
+
     def _may_expand(self, plan: Any, sub_goal: Any) -> bool:
+        """Should a resolved sub-goal spawn one per discovered entity?
+
+        Almost always no. ``expand_plan`` reads the entity list off whatever
+        page resolved and creates a sub-goal for each, without consulting the
+        task -- and this loop used to call it on every resolve. Measured, that
+        turned "What are the fees on the Classic credit card?" into four
+        sub-goals: the answer, then one each for Gold, Platinum and Titanium,
+        spending the model-call budget on cards nobody asked about and listing
+        them under "Not found".
+
+        The task type is the gate. It scores 14/14 on the labelled set in
+        ``tests/test_loop.py::TestExpansionGate``; re-run it if this changes.
+        """
         if len(plan.sub_goals) >= self._max_sub_goals:
             return False
-        return sub_goal.metadata.get("expansion_depth", 0) < self._max_expansion_depth
+        if sub_goal.metadata.get("expansion_depth", 0) >= self._max_expansion_depth:
+            return False
+        return plan.goal.task_type in self.EXPANDING_TASK_TYPES
+
+    @staticmethod
+    def _narrow_to_named_entities(verdict: dict[str, Any], task: str) -> dict[str, Any]:
+        """Expand only to the entities the task actually named, if it named any.
+
+        "Compare the Classic and Gold credit cards" discovers eight cards and
+        would fan out to all of them; ``MAX_SUB_GOALS`` then truncates to an
+        arbitrary three, which may not include either card asked about. When
+        the task names entities that were discovered, those are the ones worth
+        a sub-goal. When it names none -- an open comparison or a
+        recommendation -- the full set is right and is left alone.
+        """
+        entities = ((verdict.get("extracted") or {}).get("entities")) or []
+        if not entities:
+            return verdict
+        usable = [e for e in entities if isinstance(e, dict) and e.get("name")]
+        singled_out = set(_entities_named_by(task, [str(e["name"]) for e in usable]))
+        if not singled_out or len(singled_out) == len(usable):
+            return verdict
+        named = [e for e in usable if str(e["name"]) in singled_out]
+        logger.info(
+            "expansion narrowed to the entities the task named: %s (of %d discovered)",
+            [e["name"] for e in named], len(entities),
+        )
+        return {**verdict, "extracted": {**verdict["extracted"], "entities": named}}
 
     def _mark_remaining_unavailable(self, plan: Any, reason: str, result: LoopResult) -> None:
         from person_b.api import mark_not_available
@@ -577,10 +681,16 @@ class ResearchLoop:
         synthesis = synthesize(task, plan=plan, validated_results=validated)
         claims = synthesis.get("claims", [])
 
-        # validate_answer is given exactly the pages this run fetched, which is
-        # what makes the check meaningful: a claim citing anything else cannot
-        # be attributed and does not survive into the answer.
-        verification = validate_answer(claims, self._visited, strict=True)
+        # validate_answer is given exactly the pages this run fetched -- and
+        # their *text*, not just their URLs. Person B's attribution accepts
+        # either, but with bare URLs it can only check "was this page visited",
+        # which every mechanically-built claim passes by construction. Handing
+        # it the content is what turns the support rate from "cites a page we
+        # fetched" into "its value is on the page it cites" (PATCH 17).
+        visited_pages = [
+            {"url": url, "text": self._page_text.get(url, "")} for url in self._visited
+        ]
+        verification = validate_answer(claims, visited_pages, strict=True)
         final = finalize(synthesis, verification)
         meta = final.get("metadata", {})
 
@@ -591,6 +701,8 @@ class ResearchLoop:
         result.claims_total = int(meta.get("claims_total", 0))
         result.claims_supported = int(meta.get("claims_supported", 0))
 
+        result.template_answer = result.answer
+
         self._emit(
             "answer_verified",
             support_rate=result.support_rate,
@@ -600,9 +712,44 @@ class ResearchLoop:
             claims_contradicted=int(meta.get("claims_contradicted", 0)),
             prose_removed=list(meta.get("prose_removed", [])),
         )
+
+        self._compose_answer(task, verification, result)
         logger.info(
             "loop finished: task=%r sub_goals=%d resolved=%d support=%.2f "
-            "pages=%d llm_calls=%d gate_rejections=%d",
+            "pages=%d llm_calls=%d gate_rejections=%d answer=%s",
             task, len(result.outcomes), result.resolved_count, result.support_rate,
             self._pages_used, self._llm.calls, self._gate_rejections,
+            result.answer_source,
         )
+
+    def _compose_answer(self, task: str, verification: dict, result: LoopResult) -> None:
+        """Replace the template wording with grounded prose, if that is possible.
+
+        The template answer is already in ``result.answer`` before this runs and
+        stays there unless composition produces something that survives
+        grounding. Composition can improve the answer; it can never remove one.
+        """
+        if not self._compose:
+            return
+
+        # Only claims that passed verification are offered. Composing from the
+        # unfiltered set would let a claim their attribution rejected reappear
+        # in the prose, laundered through the model.
+        verified = [
+            chk.get("claim") or {}
+            for chk in verification.get("passed", [])
+            if isinstance(chk, dict)
+        ]
+        composition = compose_answer(
+            task, verified, self._llm, language=self._language
+        )
+        result.composition = composition.to_dict()
+
+        if not composition.attempted:
+            self._emit("answer_composed", **composition.to_dict())
+            return
+
+        if composition.used:
+            result.answer = composition.text
+            result.answer_source = "composed"
+        self._emit("answer_composed", **composition.to_dict())

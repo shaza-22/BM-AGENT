@@ -271,6 +271,84 @@ answer reading *"Banque Misr offers the following credit cards: Personal
 Loans, …"*. This was the only place the delivered answer named a product
 category it had not established. Now neutral; `field` is `entity_list`.
 
+### PATCH 16 — `reasoning/synthesize.py`: table rows rendered without their values
+
+```python
+for k, v in rec.items():
+    if k and v and k != v and k.lower() not in ("details", "col_0", "col_1"):
+        statement = f"{t_name}: {k} is {v}."
+```
+
+A record is a *row* — `{label_column: row_label, value_column: value}`. Iterating
+it cell-wise and then excluding the column literally named `"details"` — which
+on this site is the **value** column — kept the label and threw the answer away.
+Measured on the Classic card page:
+
+| record | old claim | new claim |
+|---|---|---|
+| `{"Fees and charges": "Issuance", "Details": "EGP 250"}` | `"Fees and charges: Fees and charges is Issuance."` | `"Fees and charges: Issuance — EGP 250."` |
+
+All 41 table claims on that page had the old shape: a row label asserted as
+though it were a value, with **no amount anywhere in any of them**. A run could
+report "42 claims, 100% verified" and contain not one fee.
+
+Separately, table claims were appended to `claims` but **never to
+`answer_parts`**, so on any page that also yielded three entities the entity
+list became the entire answer and every extracted figure was dropped. That is
+the "can say what it found but not what it costs" symptom.
+
+Rows are now read as label/value using the table's own header order, and the
+values reach the prose. A one-column record (`{"Issuance": "250 EGP"}`, which
+their own tests use) is treated as an already-paired field and value.
+
+### PATCH 17 — `verification/attribution.py`: verification was nominal
+
+```python
+elif strict and claim_url not in visited_urls:   → UNSUPPORTED
+else:                                            → SUPPORTED
+```
+
+`attribute_sources` decided support **purely on whether the claim's
+`source_url` was in the visited set**. It never compared the claim's text to
+the page. Since `synthesize` stamps every claim with the URL of the page it was
+built from, every claim was supported by construction — "100% verified" meant
+*"100% of claims cite a page we fetched"*, which is the number the interface
+puts a bar around.
+
+A claim's value must now actually occur in the text of the page it cites. When
+the caller passes pages carrying their content (a `PageContext`, or a dict with
+`url`/`text`) the check runs; when it passes bare URL strings there is no text
+to check and behaviour is exactly as before — so their own suite, which passes
+URLs, is unaffected. **Strictly stronger where it can be, never weaker.**
+
+Measured on a forged claim (`"The annual fee is EGP 9999."`) against the
+Classic card page:
+
+| visited passed as | supported | rate |
+|---|---|---|
+| bare URLs (old) | 36/36 | 1.00 |
+| URLs + page text | 35/36 | 0.97 |
+
+`agent/loop.py` now passes the text.
+
+### PATCH 18 — `planning/planner.py`: two classifier misses that changed the plan
+
+Task type decides whether a plan may fan out to several entities, so a
+misclassification is not cosmetic.
+
+- **`"better than"` needs the word "than".** *"Which is better, a personal loan
+  or a car loan?"* matched nothing and fell through to `GENERAL`, so a genuine
+  comparison could not expand. Added `better`, `" or a "`, `" or an "`.
+- **Bare `"list"` is a noun at least as often as a verb.** *"Where can I find
+  the branch list?"* classified as `MULTI_HOP`, so a single lookup fanned out
+  to every entity on the page it landed on. `MULTI_HOP` now needs the
+  enumerate-*and*-detail sense (`list all`, `and their`, `for each`, …).
+- Also removed `"which card"`, the only category-specific token in the
+  function, and replaced it with category-free equivalents.
+
+Measured against 23 labelled `(task, should_expand)` pairs in
+`tests/test_loop.py::TestExpansionGate`: **23/23**.
+
 ---
 
 ## Not patched — reported instead

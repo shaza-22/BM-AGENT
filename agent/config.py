@@ -263,3 +263,24 @@ GATE_MIN_REPEATS = 2
 # Below this length a snippet is not distinctive enough to conclude anything
 # from -- "Cash" appears on every page of a bank site and proves nothing.
 GATE_MIN_SNIPPET_CHARS = 24
+
+
+# --- Answer composition ----------------------------------------------------
+# The vendored synthesis is template-based with no model in it, so it can fill
+# slots but cannot write prose. agent/answer.py asks the model for the final
+# wording, constrained to the claims the run verified, and agent/grounding.py
+# strikes any sentence the evidence does not support before it is shown.
+#
+# Ships on. Costs one model call per task, reserved out of LOOP_MAX_LLM_CALLS
+# below so navigation cannot spend the whole budget and leave nothing to write
+# the answer with.
+#
+# The template answer is always produced first and is what stands whenever
+# composition is skipped, fails, or is struck empty -- so this can only ever
+# improve the wording, never be the reason a run has no answer.
+COMPOSE_ANSWER = True
+
+# How many verified facts to put in front of the model. A page can yield 35;
+# the prompt stays small and the grounding set stays the same set the model
+# was shown, which is what makes "every figure must be quoted" checkable.
+COMPOSE_MAX_FACTS = 40
