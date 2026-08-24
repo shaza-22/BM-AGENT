@@ -322,7 +322,7 @@ MAX_PLANNED_SUB_GOALS = 3
 # substring of the page. See that module for why.
 #
 # Set False to revert to deterministic extraction only.
-LLM_EXTRACTION_FALLBACK = True
+LLM_EXTRACTION_FALLBACK = False
 
 # How much of a page to show the model. Long enough for a fee table, short
 # enough that a 140k-character PDF does not become the prompt.

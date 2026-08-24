@@ -1,0 +1,547 @@
+{
+  "task": "انا عندي 16 سنة ازاي افتح حساب",
+  "language": "ar",
+  "task_id": "be5eb49e6187",
+  "events": [
+    {
+      "name": "resolved",
+      "data": {
+        "session_id": "1cffbfa17bf6",
+        "task": "انا عندي 16 سنة ازاي افتح حساب",
+        "sub_goal": "انا عندي 16 سنة ازاي افتح حساب",
+        "used_context": false,
+        "reasoning": "The latest request is in Arabic and asks how to open a bank account at age 16. It is a completely new topic unrelated to the previous turns about Banque Misr credit cards and their fees, so no context needs to be added.",
+        "language": "ar",
+        "replayed": false
+      }
+    },
+    {
+      "name": "plan",
+      "data": {
+        "plan_id": "plan_b2d24426",
+        "task_type": "general",
+        "target_fields": [
+          "overview"
+        ],
+        "sub_goals": [
+          {
+            "id": "sg_001",
+            "question": "ما هو الحد الأدنى العمري لفتح حساب بانكي وما هي شروط فتح حساب للقصر لمن هم في سن 16 سنة؟",
+            "status": "pending",
+            "why": "معرفة ما إذا كان مسموح لمن هو في سن 16 سنة فتح حساب بانكي وما هي المتطلبات والشروط الخاصة بهذه الفئة العمرية."
+          },
+          {
+            "id": "sg_002",
+            "question": "ما هي المستندات والأوراق المطلوبة لفتح حساب للأشخاص في سن 16 سنة؟",
+            "status": "pending",
+            "why": "تحديد الأوراق الرسمية اللازمة لإتمام فتح الحساب بناءً على السن القانوني."
+          }
+        ],
+        "gate_enabled": true,
+        "plan_source": "model",
+        "plan_reasoning": "المستخدم يسال عن كيفية فتح حساب وهو في سن 16 سنة. يتطلب ذلك اولا معرفة الشروط والسن الاقل المسموح به لفتح الحساب، ثم معرفة المستندات المطلوبة لهذه الفئة العمرية.",
+        "pages_used": 0,
+        "pages_max": 25,
+        "llm_calls_used": 1,
+        "llm_calls_max": 12
+      }
+    },
+    {
+      "name": "sub_goal_started",
+      "data": {
+        "sub_goal_id": "sg_001",
+        "question": "ما هو الحد الأدنى العمري لفتح حساب بانكي وما هي شروط فتح حساب للقصر لمن هم في سن 16 سنة؟",
+        "index": 1,
+        "total": 2,
+        "target_fields": [
+          "overview"
+        ]
+      }
+    },
+    {
+      "name": "hop",
+      "data": {
+        "hop": 0,
+        "sub_goal": "ما هو الحد الأدنى العمري لفتح حساب بانكي وما هي شروط فتح حساب للقصر لمن هم في سن 16 سنة؟",
+        "sub_goal_id": "sg_001",
+        "url": "https://www.banquemisr.com/?sc_lang=ar-EG",
+        "label": null,
+        "source": null,
+        "reasoning": "صفحة البداية لكل عملية بحث (الرابط الأساسي).",
+        "confidence": 1.0,
+        "status": 200,
+        "content_type": "html",
+        "validated": false,
+        "validate_reason": "Partial evidence found; missing: ['overview'].",
+        "links_found": 100,
+        "candidates_offered": 0,
+        "candidates_available": 0,
+        "elapsed_ms": 1117
+      }
+    },
+    {
+      "name": "hop",
+      "data": {
+        "hop": 1,
+        "sub_goal": "ما هو الحد الأدنى العمري لفتح حساب بانكي وما هي شروط فتح حساب للقصر لمن هم في سن 16 سنة؟",
+        "sub_goal_id": "sg_001",
+        "url": "https://www.banquemisr.com/Home/SMEs/Retail%20Banking/Accounts%20And%20Deposits",
+        "label": "خدمات ومنتجات التجزئة المصرفية حسابات، ودائع وشهادات",
+        "source": "body",
+        "reasoning": "البحث عن الحد الأدنى لفتح الحساب وشروط حسابات القصر يتطلب الانتقال إلى قسم خدمات ومنتجات التجزئة المصرفية والحسابات والودائع.",
+        "confidence": 0.9,
+        "status": 200,
+        "content_type": "html",
+        "validated": false,
+        "validate_reason": "No relevant structured evidence found on page.",
+        "links_found": 73,
+        "candidates_offered": 50,
+        "candidates_available": 100,
+        "elapsed_ms": 364
+      }
+    },
+    {
+      "name": "hop",
+      "data": {
+        "hop": 2,
+        "sub_goal": "ما هو الحد الأدنى العمري لفتح حساب بانكي وما هي شروط فتح حساب للقصر لمن هم في سن 16 سنة؟",
+        "sub_goal_id": "sg_001",
+        "url": "https://www.banquemisr.com/Home/SMEs/Retail%20Banking/Accounts%20And%20Deposits/Current%20Accounts/Details",
+        "label": "المزيد من التفاصيل",
+        "source": "body",
+        "reasoning": "نبأ أن نصفب اهتمامنا على الحسابات وشروطها من خلال التفاصيل للوصول ِلى العمر المسموح وشروط القصر.",
+        "confidence": 0.8,
+        "status": 200,
+        "content_type": "html",
+        "validated": false,
+        "validate_reason": "Partial evidence found; missing: ['overview'].",
+        "links_found": 70,
+        "candidates_offered": 50,
+        "candidates_available": 155,
+        "elapsed_ms": 1005
+      }
+    },
+    {
+      "name": "hop",
+      "data": {
+        "hop": 3,
+        "sub_goal": "ما هو الحد الأدنى العمري لفتح حساب بانكي وما هي شروط فتح حساب للقصر لمن هم في سن 16 سنة؟",
+        "sub_goal_id": "sg_001",
+        "url": "https://www.banquemisr.com/-/media/Accounts-Terms--Conditions.ashx",
+        "label": "تطبق الشروط والاحكام",
+        "source": "body",
+        "reasoning": "أبحث عن شروط فتح الحساب والحد الأدنى العمري والشروط الخاصة بالقصر، وقد تجد هذه التفاصيل في وثيقة الشروط والأحكام.",
+        "confidence": 0.7,
+        "status": 200,
+        "content_type": "pdf",
+        "validated": false,
+        "validate_reason": "No relevant structured evidence found on page.",
+        "links_found": 0,
+        "candidates_offered": 50,
+        "candidates_available": 161,
+        "elapsed_ms": 7744
+      }
+    },
+    {
+      "name": "hop",
+      "data": {
+        "hop": 4,
+        "sub_goal": "ما هو الحد الأدنى العمري لفتح حساب بانكي وما هي شروط فتح حساب للقصر لمن هم في سن 16 سنة؟",
+        "sub_goal_id": "sg_001",
+        "url": "https://digital.banquemisr.com/retail-customers/account-opening/apply",
+        "label": "بالضغط على الرابط التالي",
+        "source": "body",
+        "reasoning": "الرابط 0 يؤدي إلى صفحة فتح الحسابات للعملاء الأفراد والتي قد تحتوي على الشروط والأحكام الخاصة بفتح الحسابات والحد الأدنى العمري وشروط القصر.",
+        "confidence": 0.8,
+        "status": 200,
+        "content_type": "html",
+        "validated": false,
+        "validate_reason": "No relevant structured evidence found on page.",
+        "links_found": 0,
+        "candidates_offered": 50,
+        "candidates_available": 160,
+        "elapsed_ms": 10387
+      }
+    },
+    {
+      "name": "extraction",
+      "data": {
+        "sub_goal_id": "sg_001",
+        "url": "https://digital.banquemisr.com/retail-customers/account-opening/apply",
+        "attempted": true,
+        "used": false,
+        "present": false,
+        "reason": "the model reports the page does not answer this",
+        "note": "The page does not provide information about the minimum age to open a bank account or the conditions for opening an account for minors at the age of 16.",
+        "offered": 0,
+        "kept": 0,
+        "struck": [],
+        "facts": []
+      }
+    },
+    {
+      "name": "sub_goal_finished",
+      "data": {
+        "sub_goal_id": "sg_001",
+        "question": "ما هو الحد الأدنى العمري لفتح حساب بانكي وما هي شروط فتح حساب للقصر لمن هم في سن 16 سنة؟",
+        "status": "not_available",
+        "reason": "نحن بالفعل في صفحة تقديم الطلبات لحسابات التجزئة المصرفية، ولا توجد روابط إضافية تبدو مفيدة أكثر للإجابة على سؤال الحد الأدنى العمري وشروط فتح حساب للقصر.",
+        "source_url": "https://digital.banquemisr.com/retail-customers/account-opening/apply",
+        "nav_status": "arrived",
+        "hops_used": 4,
+        "pages_fetched": 5,
+        "gate": {
+          "accepted": true,
+          "reason": "not a resolve; nothing to gate",
+          "snippets_checked": 0,
+          "snippets_unique": 0,
+          "pages_compared": 0
+        },
+        "pages_used": 5,
+        "pages_max": 25,
+        "llm_calls_used": 7,
+        "llm_calls_max": 12
+      }
+    },
+    {
+      "name": "sub_goal_started",
+      "data": {
+        "sub_goal_id": "sg_002",
+        "question": "ما هي المستندات والأوراق المطلوبة لفتح حساب للأشخاص في سن 16 سنة؟",
+        "index": 2,
+        "total": 2,
+        "target_fields": [
+          "overview"
+        ]
+      }
+    },
+    {
+      "name": "hop",
+      "data": {
+        "hop": 0,
+        "sub_goal": "ما هي المستندات والأوراق المطلوبة لفتح حساب للأشخاص في سن 16 سنة؟",
+        "sub_goal_id": "sg_002",
+        "url": "https://www.banquemisr.com/?sc_lang=ar-EG",
+        "label": null,
+        "source": null,
+        "reasoning": "صفحة البداية لكل عملية بحث (الرابط الأساسي).",
+        "confidence": 1.0,
+        "status": 200,
+        "content_type": "html",
+        "validated": false,
+        "validate_reason": "Partial evidence found; missing: ['overview'].",
+        "links_found": 100,
+        "candidates_offered": 0,
+        "candidates_available": 0,
+        "elapsed_ms": 99
+      }
+    },
+    {
+      "name": "hop",
+      "data": {
+        "hop": 1,
+        "sub_goal": "ما هي المستندات والأوراق المطلوبة لفتح حساب للأشخاص في سن 16 سنة؟",
+        "sub_goal_id": "sg_002",
+        "url": "https://www.banquemisr.com/Home/SMEs/Retail%20Banking/Accounts%20And%20Deposits",
+        "label": "خدمات ومنتجات التجزئة المصرفية حسابات، ودائع وشهادات",
+        "source": "body",
+        "reasoning": "نبحث عن معلومات الحسابات والمستندات المطلوبة لفتح حساب للأشخاص في سن 16 سنة، وهذا الرابط يؤدي إلى قسم الحسابات والودائع.",
+        "confidence": 0.9,
+        "status": 200,
+        "content_type": "html",
+        "validated": false,
+        "validate_reason": "No relevant structured evidence found on page.",
+        "links_found": 73,
+        "candidates_offered": 50,
+        "candidates_available": 100,
+        "elapsed_ms": 87
+      }
+    },
+    {
+      "name": "hop",
+      "data": {
+        "hop": 2,
+        "sub_goal": "ما هي المستندات والأوراق المطلوبة لفتح حساب للأشخاص في سن 16 سنة؟",
+        "sub_goal_id": "sg_002",
+        "url": "https://www.banquemisr.com/Home/SMEs/Retail%20Banking/Accounts%20And%20Deposits/Savings%20Accounts/Details",
+        "label": "المزيد من التفاصيل",
+        "source": "body",
+        "reasoning": "نبحث عن حسابات التوفير والمستندات الخاصة بفئة الشباب (16 سنة)، وحسابات التوفير قد تحتوي على تفاصيل فتح الحساب لهذه الفئة.",
+        "confidence": 0.6,
+        "status": 200,
+        "content_type": "html",
+        "validated": false,
+        "validate_reason": "Partial evidence found; missing: ['overview'].",
+        "links_found": 72,
+        "candidates_offered": 50,
+        "candidates_available": 155,
+        "elapsed_ms": 465
+      }
+    },
+    {
+      "name": "hop",
+      "data": {
+        "hop": 3,
+        "sub_goal": "ما هي المستندات والأوراق المطلوبة لفتح حساب للأشخاص في سن 16 سنة؟",
+        "sub_goal_id": "sg_002",
+        "url": "https://www.banquemisr.com/SMEs/Retail-Banking/Pages/BM-Youth",
+        "label": "الضغط هنا",
+        "source": "body",
+        "reasoning": "نبحث عن حساب مخصص لفئة سن 16 سنة، والرابط الخاص بـ BM Youth يبدو الأنسب للوصول إلى تفاصيل حساب الشباب وشروط فتحه.",
+        "confidence": 0.9,
+        "status": 200,
+        "content_type": "html",
+        "validated": false,
+        "validate_reason": "No relevant structured evidence found on page.",
+        "links_found": 72,
+        "candidates_offered": 50,
+        "candidates_available": 163,
+        "elapsed_ms": 488
+      }
+    },
+    {
+      "name": "hop",
+      "data": {
+        "hop": 4,
+        "sub_goal": "ما هي المستندات والأوراق المطلوبة لفتح حساب للأشخاص في سن 16 سنة؟",
+        "sub_goal_id": "sg_002",
+        "url": "https://digital.banquemisr.com/retail-customers/account-opening/apply",
+        "label": "Apply",
+        "source": "body",
+        "reasoning": "نبحث عن صفحة فتح الحسابات وتقديم الطلبات لمعرفة الأوراق المطلوبة لفتح حساب للشباب في سن 16 سنة.",
+        "confidence": 0.8,
+        "status": 200,
+        "content_type": "html",
+        "validated": false,
+        "validate_reason": "No relevant structured evidence found on page.",
+        "links_found": 0,
+        "candidates_offered": 50,
+        "candidates_available": 169,
+        "elapsed_ms": 11
+      }
+    },
+    {
+      "name": "hop",
+      "data": {
+        "hop": 5,
+        "sub_goal": "ما هي المستندات والأوراق المطلوبة لفتح حساب للأشخاص في سن 16 سنة؟",
+        "sub_goal_id": "sg_002",
+        "url": "https://www.banquemisr.com/Home/SMEs/Retail%20Banking/Pages/bm%20youth%20combined",
+        "label": "اعرض المزيد من التفاصيل",
+        "source": "body",
+        "reasoning": "النتقال إلى صفحة برنامج شباب مصر (BM Youth) المخصص لهذه الفئة لمعرفة المستندات المطلوبة لفتح الحساب.",
+        "confidence": 0.9,
+        "status": 200,
+        "content_type": "html",
+        "validated": false,
+        "validate_reason": "No relevant structured evidence found on page.",
+        "links_found": 67,
+        "candidates_offered": 50,
+        "candidates_available": 168,
+        "elapsed_ms": 1473
+      }
+    },
+    {
+      "name": "sub_goal_finished",
+      "data": {
+        "sub_goal_id": "sg_002",
+        "question": "ما هي المستندات والأوراق المطلوبة لفتح حساب للأشخاص في سن 16 سنة؟",
+        "status": "partial",
+        "reason": "Partial evidence found; missing: ['overview'].",
+        "source_url": "https://www.banquemisr.com/?sc_lang=ar-EG",
+        "nav_status": "exhausted",
+        "hops_used": 5,
+        "pages_fetched": 6,
+        "gate": {
+          "accepted": true,
+          "reason": "not a resolve; nothing to gate",
+          "snippets_checked": 0,
+          "snippets_unique": 0,
+          "pages_compared": 0
+        },
+        "pages_used": 11,
+        "pages_max": 25,
+        "llm_calls_used": 12,
+        "llm_calls_max": 12
+      }
+    },
+    {
+      "name": "budget",
+      "data": {
+        "pages_used": 11,
+        "pages_max": 25,
+        "llm_calls_used": 12,
+        "llm_calls_max": 12
+      }
+    },
+    {
+      "name": "synthesis_started",
+      "data": {
+        "validated_results": 1,
+        "visited_pages": 8
+      }
+    },
+    {
+      "name": "answer_verified",
+      "data": {
+        "support_rate": 1.0,
+        "claims_total": 4,
+        "claims_supported": 4,
+        "claims_unsupported": 0,
+        "claims_contradicted": 0,
+        "prose_removed": []
+      }
+    },
+    {
+      "name": "answer_composed",
+      "data": {
+        "attempted": true,
+        "used": true,
+        "reason": "6/7 sentences grounded (6 fact)",
+        "claims_offered": 4,
+        "grounding": {
+          "sentences_total": 7,
+          "sentences_kept": 6,
+          "sentences_struck": 1,
+          "rate": 0.8571,
+          "struck": [
+            {
+              "sentence": "الوقائع المتاحة لا تتضمن معلومات حول كيفية فتح حساب لمن هم في سن 16 سنة.",
+              "reason": "figure(s) not in the evidence: 16"
+            }
+          ]
+        },
+        "tiered": true,
+        "tiers": {
+          "fact": [
+            "الوقائع المستخرجة من الصفحة التالية:",
+            "الشراء: {{currencyCalculator.CashBuying}}",
+            "الشراء: {{currencyCalculator.TransferBuying}}",
+            "البيع: {{currencyCalculator.CashSelling}}",
+            "البيع: {{currencyCalculator.TransferSelling}}",
+            "المصدر: https://www.banquemisr.com/?sc_lang=ar-EG"
+          ]
+        }
+      }
+    },
+    {
+      "name": "answer",
+      "data": {
+        "answer_source": "composed",
+        "composition": {
+          "attempted": true,
+          "used": true,
+          "reason": "6/7 sentences grounded (6 fact)",
+          "claims_offered": 4,
+          "grounding": {
+            "sentences_total": 7,
+            "sentences_kept": 6,
+            "sentences_struck": 1,
+            "rate": 0.8571,
+            "struck": [
+              {
+                "sentence": "الوقائع المتاحة لا تتضمن معلومات حول كيفية فتح حساب لمن هم في سن 16 سنة.",
+                "reason": "figure(s) not in the evidence: 16"
+              }
+            ]
+          },
+          "tiered": true,
+          "tiers": {
+            "fact": [
+              "الوقائع المستخرجة من الصفحة التالية:",
+              "الشراء: {{currencyCalculator.CashBuying}}",
+              "الشراء: {{currencyCalculator.TransferBuying}}",
+              "البيع: {{currencyCalculator.CashSelling}}",
+              "البيع: {{currencyCalculator.TransferSelling}}",
+              "المصدر: https://www.banquemisr.com/?sc_lang=ar-EG"
+            ]
+          }
+        },
+        "answer": "الوقائع المستخرجة من الصفحة التالية:\nالشراء: {{currencyCalculator.CashBuying}}\nالشراء: {{currencyCalculator.TransferBuying}}\nالبيع: {{currencyCalculator.CashSelling}}\nالبيع: {{currencyCalculator.TransferSelling}}\nالمصدر: https://www.banquemisr.com/?sc_lang=ar-EG",
+        "source_urls": [
+          "https://www.banquemisr.com/?sc_lang=ar-EG"
+        ],
+        "not_found": [
+          "ما هو الحد الأدنى العمري لفتح حساب بانكي وما هي شروط فتح حساب للقصر لمن هم في سن 16 سنة؟: Information not available on Banque Misr website."
+        ],
+        "support_rate": 1.0,
+        "claims_total": 4,
+        "claims_supported": 4,
+        "resolved_count": 0,
+        "sub_goals_total": 2,
+        "budget_exhausted": null,
+        "gate_rejections": 0
+      }
+    },
+    {
+      "name": "done",
+      "data": {
+        "status": "exhausted",
+        "language": "ar",
+        "cap_hit": null,
+        "final_reasoning": "",
+        "page_url": null,
+        "sources": [
+          "https://www.banquemisr.com/?sc_lang=ar-EG",
+          "https://www.banquemisr.com/Home/SMEs/Retail%20Banking/Accounts%20And%20Deposits",
+          "https://www.banquemisr.com/Home/SMEs/Retail%20Banking/Accounts%20And%20Deposits/Current%20Accounts/Details",
+          "https://www.banquemisr.com/-/media/Accounts-Terms--Conditions.ashx",
+          "https://digital.banquemisr.com/retail-customers/account-opening/apply",
+          "https://www.banquemisr.com/Home/SMEs/Retail%20Banking/Accounts%20And%20Deposits/Savings%20Accounts/Details",
+          "https://www.banquemisr.com/SMEs/Retail-Banking/Pages/BM-Youth",
+          "https://www.banquemisr.com/Home/SMEs/Retail%20Banking/Pages/bm%20youth%20combined"
+        ],
+        "hops_used": 9,
+        "pages_fetched": 11,
+        "extracted": null,
+        "timing": {},
+        "answer": {
+          "answer_source": "composed",
+          "composition": {
+            "attempted": true,
+            "used": true,
+            "reason": "6/7 sentences grounded (6 fact)",
+            "claims_offered": 4,
+            "grounding": {
+              "sentences_total": 7,
+              "sentences_kept": 6,
+              "sentences_struck": 1,
+              "rate": 0.8571,
+              "struck": [
+                {
+                  "sentence": "الوقائع المتاحة لا تتضمن معلومات حول كيفية فتح حساب لمن هم في سن 16 سنة.",
+                  "reason": "figure(s) not in the evidence: 16"
+                }
+              ]
+            },
+            "tiered": true,
+            "tiers": {
+              "fact": [
+                "الوقائع المستخرجة من الصفحة التالية:",
+                "الشراء: {{currencyCalculator.CashBuying}}",
+                "الشراء: {{currencyCalculator.TransferBuying}}",
+                "البيع: {{currencyCalculator.CashSelling}}",
+                "البيع: {{currencyCalculator.TransferSelling}}",
+                "المصدر: https://www.banquemisr.com/?sc_lang=ar-EG"
+              ]
+            }
+          },
+          "answer": "الوقائع المستخرجة من الصفحة التالية:\nالشراء: {{currencyCalculator.CashBuying}}\nالشراء: {{currencyCalculator.TransferBuying}}\nالبيع: {{currencyCalculator.CashSelling}}\nالبيع: {{currencyCalculator.TransferSelling}}\nالمصدر: https://www.banquemisr.com/?sc_lang=ar-EG",
+          "source_urls": [
+            "https://www.banquemisr.com/?sc_lang=ar-EG"
+          ],
+          "not_found": [
+            "ما هو الحد الأدنى العمري لفتح حساب بانكي وما هي شروط فتح حساب للقصر لمن هم في سن 16 سنة؟: Information not available on Banque Misr website."
+          ],
+          "support_rate": 1.0,
+          "claims_total": 4,
+          "claims_supported": 4,
+          "resolved_count": 0,
+          "sub_goals_total": 2,
+          "budget_exhausted": null,
+          "gate_rejections": 0
+        }
+      }
+    }
+  ]
+}
