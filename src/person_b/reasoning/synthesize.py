@@ -1,5 +1,6 @@
 """Synthesis of validated research evidence into structured answers with explicit claims."""
 
+import re  # PATCH 19
 from typing import Any, Dict, List, Optional, Set
 import uuid
 
@@ -32,6 +33,68 @@ from person_b.models import (
 #
 # Rows are now read as label/value using the table's own header order: the
 # first column labels the row, the rest carry values.
+# --- PATCH 19 (vendor) ------------------------------------------------------
+# Unrendered template placeholders. The site ships Vue markup that never
+# rendered -- "{{currencyCalculator.CashBuying}}" -- and it is genuinely in the
+# page text, so a verbatim check confirms it is present and a citation gets
+# attached to a variable name. Presence is not content.
+#
+# Rejected here, at the point a table row becomes a claim, so it cannot enter
+# by the deterministic path. agent/extraction.py rejects the same shapes on the
+# model path, and agent/grounding.py strikes any sentence carrying one. The
+# duplication is deliberate: this module is vendored and must not import from
+# the agent package, and a check that exists on only one path is a check that
+# will be bypassed by the other.
+_PLACEHOLDER = re.compile(r"\{\{.*?\}\}|\{%.*?%\}|\$\{.*?\}|<%.*?%>|\[\[.*?\]\]")
+
+
+def looks_like_placeholder(text: str) -> bool:
+    return bool(_PLACEHOLDER.search(text or ""))
+
+
+# The longest a table's name may be before it stops being a caption. A table
+# name is meant to be a heading; text_tables takes whatever prose line precedes
+# the pipes, which on one live page was a full sentence -- and repeating it in
+# front of all eight rows produced eight near-identical lines of answer.
+MAX_TABLE_NAME_CHARS = 48
+
+
+def _label_column(headers: List[str], records: List[Dict[str, Any]]) -> int:
+    """Which column names the row, rather than carrying its value?
+
+    Assuming the first column was a mistake. On a live limits table the amount
+    came first, so every fact read "Equivalent to 90,000 EGP — Maximum Daily
+    Debit Transaction Limit", which is backwards.
+
+    Decided by measurement rather than position: the value column is the one
+    whose cells carry digits. The label column is the other one. Ties keep the
+    original order, so nothing changes on the tables that were already right.
+    """
+    if len(headers) < 2:
+        return 0
+    # An explicitly labelled table already says which column is which. The
+    # extraction fallback builds ["label", "value"] tables where the roles are
+    # known, and measuring them got it wrong the moment a label contained a
+    # digit -- a fact numbered "fact 1" was read as the value, and the real
+    # value became a label that appears nowhere on the page, so attribution
+    # rejected every claim. A convention beats a heuristic where one exists.
+    if [h.strip().lower() for h in headers[:2]] == ["label", "value"]:
+        return 0
+    digit_share = []
+    for column in headers:
+        cells = [str(rec.get(column, "")) for rec in records if isinstance(rec, dict)]
+        cells = [c for c in cells if c.strip()]
+        if not cells:
+            digit_share.append(0.0)
+            continue
+        digit_share.append(sum(any(ch.isdigit() for ch in c) for c in cells) / len(cells))
+    # Only override the default when one column is clearly the numeric one.
+    if digit_share[0] - min(digit_share[1:]) > 0.5:
+        return int(min(range(len(digit_share)), key=lambda i: digit_share[i]))
+    return 0
+# --- END PATCH 19 ---
+
+
 def _row_facts(table: Dict[str, Any]) -> List[Dict[str, str]]:
     """Turn one table into ``{label, field, value}`` facts, one per value cell."""
     headers = [h for h in (table.get("headers") or []) if h]
@@ -52,7 +115,10 @@ def _row_facts(table: Dict[str, Any]) -> List[Dict[str, str]]:
             if value and value != only:
                 facts.append({"label": str(only), "field": str(only), "value": value})
             continue
-        label_key, value_keys = keys[0], keys[1:]
+        # PATCH 19: the label column is chosen by measurement, not by position.
+        label_index = _label_column(keys, table.get("records") or [])
+        label_key = keys[label_index]
+        value_keys = [k for i, k in enumerate(keys) if i != label_index]
         label = str(rec.get(label_key, "")).strip()
         if not label:
             continue
@@ -62,13 +128,20 @@ def _row_facts(table: Dict[str, Any]) -> List[Dict[str, str]]:
             # the only thing the old ``k != v`` guard was really catching.
             if not value or value == label:
                 continue
+            # PATCH 19: a variable name is not a fact, whatever the page says.
+            if looks_like_placeholder(value) or looks_like_placeholder(label):
+                continue
             facts.append({"label": label, "field": str(value_key), "value": value})
     return facts
 
 
 def _fact_statement(table_name: str, fact: Dict[str, str], multi_value: bool) -> str:
     """One fact as a sentence that actually contains the value."""
-    head = f"{table_name}: {fact['label']}" if table_name else fact["label"]
+    # PATCH 19: a table name only prefixes a row while it reads as a caption.
+    # A sentence-length one repeated per row produced eight lines of answer that
+    # differed only in their tail.
+    caption = table_name if len(table_name or "") <= MAX_TABLE_NAME_CHARS else ""
+    head = f"{caption}: {fact['label']}" if caption else fact["label"]
     if multi_value:
         return f"{head} — {fact['field']}: {fact['value']}."
     return f"{head} — {fact['value']}."

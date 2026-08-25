@@ -528,3 +528,105 @@ class TestTheListPageWithoutItsMarker:
         assert outcome.status == "resolved", "the fallback did not rescue the page"
         assert outcome.extraction["kept"] >= 3
         assert any("Credit Card" in f["value"] for f in outcome.extraction["facts"])
+
+
+class TestThreePageShapes:
+    """The fallback as the general rescue, across the shapes the site has.
+
+    Deterministic matching runs first everywhere -- fast, free, and reliable
+    where it works. The fallback fires only where it found nothing. These are
+    the three shapes that matter on this site, and the flag was re-enabled on
+    the strength of them.
+    """
+
+    MULTI_TABLE = (
+        "Accounts And Deposits\n"
+        "- There are established limits on daily and monthly transactions, as well as "
+        "on account balances, as detailed below:\n"
+        "Amount | Limit\n"
+        "Equivalent to 90,000 EGP | Maximum Daily Debit Transaction Limit\n"
+        "Equivalent to 250,000 EGP | Maximum Monthly Debit Transaction Limit\n"
+        "Equivalent to 1,000,000 EGP | Maximum Account Balance\n"
+        "Currencies and Exchange Rates\n"
+        "Buying | Cash\nTransfer | {{currencyCalculator.CashBuying}}\n"
+    )
+
+    def _claims_for(self, task: str, text: str, fallback: bool = True):
+        from person_b.api import next_pending_sub_goal, plan_task, synthesize, validate_answer
+
+        from agent.loop import SubGoalOutcome, _Verdicts
+
+        url = "https://www.banquemisr.com/probe"
+        page = {"url": url, "text": text, "content_type": "html", "status": 200, "ok": True}
+
+        def extractor(prompt: str) -> str:
+            body = prompt.split("---", 1)[1].rsplit("---", 1)[0]
+            lines = [l.strip() for l in body.splitlines()
+                     if 8 < len(l.strip()) < 70 and "|" not in l][:5]
+            return json.dumps({"present": bool(lines), "note": "",
+                               "facts": [{"label": f"Item {i + 1}", "value": l}
+                                         for i, l in enumerate(lines)]})
+
+        loop = ResearchLoop(
+            FakeLLMClient(lambda p: extractor(p) if EXTRACTION_MARKER in p else "{}"),
+            fetcher=live_fetcher(), on_event=lambda n, d: None,
+            compose=False, planning=False, fallback=fallback)
+        sub_goal = next_pending_sub_goal(plan_task(task))
+        verdict = loop._make_validate_fn(sub_goal, _Verdicts())(sub_goal.question, page)
+        outcome = SubGoalOutcome(
+            sub_goal_id=sub_goal.id, question=sub_goal.question,
+            status="resolved" if verdict["resolved"] else "not_available",
+            verdict=verdict, nav_status="arrived", source_url=url)
+
+        class _Nav:
+            status, pages_fetched, trail = "arrived", 2, []
+
+        _Nav.page = page
+        loop._fallback_extract(sub_goal, _Nav(), None, outcome)
+
+        verdicts = [outcome.verdict] if outcome.status == "resolved" else []
+        synthesis = synthesize(task, validated_results=verdicts)
+        verification = validate_answer(synthesis["claims"], [{"url": url, "text": text}],
+                                       strict=True)
+        return outcome, synthesis["claims"], verification
+
+    def _page(self, stem: str, strip_marker: bool = False) -> str:
+        raw = (pathlib.Path(__file__).resolve().parent.parent / "fixtures" / "live"
+               / f"{stem}.txt").read_text(encoding="utf-8", errors="replace")
+        if strip_marker:
+            raw = "\n".join(l for l in raw.splitlines() if l.strip() != "More Details")
+        return raw
+
+    def test_shape_one_fee_table_resolves_deterministically(self):
+        """Deterministic wins here, so the fallback must not spend a call."""
+        outcome, claims, verification = self._claims_for(
+            "What are the fees on the Classic credit card?",
+            self._page("home-smes-retail-banking-pages-cards-credit-cards-pages-"
+                       "classic-credit-cards"))
+        assert outcome.status == "resolved"
+        assert outcome.extraction is None, "the fallback fired on a page that already had values"
+        assert len(claims) > 20 and len(verification["passed"]) == len(claims)
+
+    def test_shape_two_list_of_names_is_rescued_by_the_fallback(self):
+        """The traced failure: deterministic sees nothing, the model reads it."""
+        outcome, claims, verification = self._claims_for(
+            "what credit card types do you have",
+            self._page("home-smes-retail-banking-pages-cards-credit-cards-list",
+                       strip_marker=True))
+        assert outcome.extraction is not None and outcome.extraction["kept"] > 0
+        assert outcome.status == "resolved"
+        assert claims and len(verification["passed"]) == len(claims)
+
+    def test_shape_three_multi_table_reads_correctly(self):
+        """No repeated lead-in, columns the right way round, no markup."""
+        _outcome, claims, verification = self._claims_for(
+            "What are the account transaction limits?", self.MULTI_TABLE)
+        statements = [c["statement"] for c in claims]
+
+        assert len(statements) == len(set(statements)), f"repeated statements: {statements}"
+        assert not any("established limits on daily and monthly" in s for s in statements), (
+            "a sentence-length table name is being repeated in front of every row")
+        assert any(s.startswith("Maximum Daily Debit Transaction Limit") for s in statements), (
+            "the label column is still being taken by position, so rows read backwards")
+        assert not any("{{" in s for s in statements), "template markup reached a claim"
+        assert len(verification["passed"]) == len(claims)

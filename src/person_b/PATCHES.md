@@ -360,6 +360,47 @@ misclassification is not cosmetic.
 Measured against 23 labelled `(task, should_expand)` pairs in
 `tests/test_loop.py::TestExpansionGate`: **23/23**.
 
+### PATCH 19 — `reasoning/synthesize.py`: multi-table rows and template markup
+
+Three defects, all in PATCH 16's row reader, all found by tracing a real run
+whose answer repeated one sentence eight times.
+
+**A sentence used as a table name was repeated in front of every row.**
+`text_tables` takes whatever prose line precedes the pipes as the table's name.
+On a live limits page that was a full sentence, so all eight rows read
+
+    - There are established limits on daily and monthly transactions, as well
+      as on account balances, as detailed below:: Equivalent to 90,000 EGP —
+      Maximum Daily Debit Transaction Limit.
+
+A table name now prefixes a row only while it still reads as a caption
+(`MAX_TABLE_NAME_CHARS = 48`).
+
+**The label column was chosen by position.** `headers[0]` was assumed to name
+the row. On that same table the amount came first, so every fact read
+backwards. The column is now chosen by measurement — the value column is the
+one whose cells carry digits — with two guards: an explicitly labelled
+`["label", "value"]` table keeps its declared order (the extraction fallback
+builds those, and measuring them got it wrong the moment a label contained a
+digit), and a tie keeps the original order so tables that were already right
+are untouched.
+
+| table | before | after |
+|---|---|---|
+| `Amount / Limit` | "Equivalent to 90,000 EGP — Maximum Daily Debit Transaction Limit" | "Maximum Daily Debit Transaction Limit — Equivalent to 90,000 EGP" |
+| `Fees and charges / Details` | unchanged | unchanged |
+
+**Unrendered template markup became a claim.** The site ships Vue that never
+rendered — `{{currencyCalculator.CashBuying}}` — and it is genuinely in the
+page text, so the verbatim check confirmed it was present and attached a
+citation to a variable name. Presence is not content.
+
+Rejected on all three paths that can produce a fact: here for the
+deterministic path, `agent/extraction.py` for the model path, and
+`agent/grounding.py` for anything reaching prose. Three places on purpose — a
+check that exists on one path is a check the other path bypasses, and this
+module is vendored so it cannot import the agent package.
+
 ---
 
 ## Not patched — reported instead
