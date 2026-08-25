@@ -301,10 +301,31 @@ class TestItFiresOnEveryRouteToAnEmptyAnswer:
     def test_any_status_without_facts_triggers_it(self, status: str):
         assert ResearchLoop._needs_extraction(self._outcome(status)) is True
 
-    def test_a_resolve_carrying_no_field_triggers_it(self):
-        """The green tick above "No verified facts were retrieved"."""
+    def test_a_resolve_carrying_only_names_triggers_it_when_a_field_was_asked_for(self):
+        """The green tick above "No verified facts were retrieved".
+
+        A list of product names answers nothing when the sub-goal asked for
+        fees, so the page gets re-read.
+        """
         verdict = {"extracted": {"entities": [{"name": "Credit Card"}], "tables": []}}
-        assert ResearchLoop._needs_extraction(self._outcome("resolved", verdict)) is True
+
+        class _SG:
+            target_fields = ["fees"]
+
+        assert ResearchLoop._needs_extraction(self._outcome("resolved", verdict), _SG()) is True
+
+    def test_a_list_of_names_is_the_answer_when_no_field_was_asked_for(self):
+        """"What card types do you have" is answered by the names themselves.
+
+        Re-reading there spends a call to be told what is already known, and
+        this is the most common page shape on the site.
+        """
+        verdict = {"extracted": {"entities": [{"name": "Classic Credit Card"}], "tables": []}}
+
+        class _SG:
+            target_fields = ["overview"]
+
+        assert ResearchLoop._needs_extraction(self._outcome("resolved", verdict), _SG()) is False
 
     def test_a_resolve_carrying_real_values_does_not(self):
         """Never speculative: a second opinion there can only agree."""
@@ -422,3 +443,88 @@ class TestEverySkipSaysWhy:
             loop._fallback_extract(self._sub_goal(), nav, None, outcome)
         assert "firing for sg_001" in caplog.text
         assert "fees.pdf" in caplog.text and "chars" in caplog.text
+
+
+class TestTheListPageWithoutItsMarker:
+    """Traced from a live report: a list page returning "no verified facts".
+
+    The vendored entity extractor depends on the literal line "More Details"
+    following each product name. Measured on the credit-cards list fixture:
+
+        with "More Details"    -> 12 entities -> validate() resolves
+        without it             ->  0 entities -> validate() returns unresolved,
+                                  "No relevant structured evidence found on page"
+
+    So the answer went to zero at **stage 1**: not extraction finding nothing
+    after validate accepted the page, and not the loop losing facts between
+    extraction and the answer -- validate rejected the page outright, because
+    the extractor saw no entities on a page that is nothing but a list of them.
+
+    That is precisely the case the fallback exists for, and this pins that it
+    rescues it.
+    """
+
+    FIXTURE = ("fixtures/live/home-smes-retail-banking-pages-cards-"
+               "credit-cards-list.txt")
+    URL = ("https://www.banquemisr.com/Home/SMEs/Retail%20Banking/Pages/"
+           "Cards/Credit%20Cards%20List")
+
+    def _pages(self):
+        raw = (pathlib.Path(__file__).resolve().parent.parent / self.FIXTURE).read_text(
+            encoding="utf-8", errors="replace")
+        without = "\n".join(l for l in raw.splitlines() if l.strip() != "More Details")
+        return raw, without
+
+    def test_the_marker_is_what_the_extractor_depends_on(self):
+        from person_b.extraction.extractor import extract_content
+
+        raw, without = self._pages()
+        assert len(extract_content(raw, ["overview"]).extracted.get("entities") or []) >= 8
+        assert extract_content(without, ["overview"]).extracted.get("entities") == []
+
+    def test_stage_one_is_where_it_goes_to_zero(self):
+        from person_b.api import next_pending_sub_goal, plan_task, validate
+
+        _raw, without = self._pages()
+        sub_goal = next_pending_sub_goal(plan_task("what credit card types do you have"))
+        verdict = validate(sub_goal, without, source_url=self.URL)
+        assert verdict["resolved"] is False
+        assert (verdict.get("extracted") or {}).get("entities") in (None, [], {})
+
+    def test_the_fallback_rescues_exactly_this_page(self):
+        from agent.loop import SubGoalOutcome, _Verdicts
+        from person_b.api import next_pending_sub_goal, plan_task
+
+        _raw, without = self._pages()
+        page = {"url": self.URL, "text": without, "content_type": "html",
+                "status": 200, "ok": True}
+
+        def extractor(prompt: str) -> str:
+            body = prompt.split("---", 1)[1].rsplit("---", 1)[0]
+            names = [l.strip() for l in body.splitlines()
+                     if "Credit Card" in l and len(l.strip()) < 60][:5]
+            return json.dumps({"present": bool(names), "note": "",
+                               "facts": [{"label": "Card type", "value": n} for n in names]})
+
+        loop = ResearchLoop(
+            FakeLLMClient(lambda p: extractor(p) if EXTRACTION_MARKER in p else "{}"),
+            fetcher=live_fetcher(), on_event=lambda n, d: None,
+            compose=False, planning=False, fallback=True)
+        sub_goal = next_pending_sub_goal(plan_task("what credit card types do you have"))
+
+        verdict = loop._make_validate_fn(sub_goal, _Verdicts())(sub_goal.question, page)
+        assert verdict["resolved"] is False, "stage 1 should reject this page"
+
+        outcome = SubGoalOutcome(sub_goal_id=sub_goal.id, question=sub_goal.question,
+                                 status="not_available", verdict=verdict,
+                                 nav_status="arrived", source_url=self.URL)
+
+        class _Nav:
+            status, pages_fetched, trail = "arrived", 3, []
+            page = {"url": TestTheListPageWithoutItsMarker.URL, "text": without}
+
+        loop._fallback_extract(sub_goal, _Nav(), None, outcome)
+
+        assert outcome.status == "resolved", "the fallback did not rescue the page"
+        assert outcome.extraction["kept"] >= 3
+        assert any("Credit Card" in f["value"] for f in outcome.extraction["facts"])
