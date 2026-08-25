@@ -13,182 +13,251 @@
      off-white ground, gold used only as an accent. The point is that this
      should look like it belongs next to the bank's website rather than like
      developer output.
+
+     Sizes are set for a projector as much as for a laptop: nothing that
+     carries meaning is below 13px, and the answer itself is set at 18px.
      --------------------------------------------------------------------- */
   :root {
-    --maroon:#8B1538; --maroon-deep:#6E1029; --maroon-soft:#F4E8EC;
-    --gold:#C9A227; --gold-soft:#FBF4DF;
-    --bg:#FAF7F4; --panel:#FFFFFF; --ink:#1E1B1C; --muted:#6E6569;
-    --line:#E9E1DD; --line-soft:#F2ECE8;
-    --ok:#1F7A4C; --ok-soft:#E3F1E9; --warn:#9A6B00; --warn-bg:#FDF6E6; --bad:#A32626;
-    --nav:#EDE7F3; --body:#E7F1EA; --footer:#FBEBE6;
-    --shadow:0 1px 2px rgba(30,27,28,.05), 0 6px 20px rgba(30,27,28,.05);
-    --radius:14px;
+    --maroon:#8A1538; --maroon-deep:#6B0F2B; --maroon-soft:#F5E9ED;
+    --gold:#C08A19; --gold-line:#E7CE93; --gold-soft:#FBF3E2;
+
+    --bg:#FAF6F3; --bg-sunk:#F3ECE7; --panel:#FFFFFF;
+    --ink:#1A1618; --ink-2:#413A3D; --muted:#6B6165;
+    --line:#E7DED9; --line-soft:#F1EAE5;
+
+    --ok:#1B6E45; --ok-soft:#E4F1EA; --warn:#8A5D00; --warn-bg:#FBF1DC;
+    --bad:#96201F; --bad-soft:#FBEAE8;
+
+    /* Region badges on a hop: three quiet, distinguishable tints. */
+    --nav:#ECE7F6; --nav-ink:#463B77;
+    --body:#E4F0E9; --body-ink:#255C42;
+    --footer:#FBE9E3; --footer-ink:#8A4324;
+
+    /* The derived-statement surface. Deliberately NOT the warning colour:
+       this is an extra layer of insight, not a caution. */
+    --insight-bg:#F8F3F5; --insight-line:#EADDE2;
+
+    --shadow-sm:0 1px 2px rgba(26,22,24,.05);
+    --shadow:0 1px 2px rgba(26,22,24,.05), 0 8px 24px -8px rgba(26,22,24,.10);
+    --shadow-lg:0 2px 4px rgba(26,22,24,.06), 0 18px 44px -14px rgba(26,22,24,.18);
+
+    --r-lg:18px; --r-md:12px; --r-sm:8px;
+
+    --fs-answer:18px; --fs-body:16px; --fs-sm:14.5px; --fs-xs:13px;
+    --track:.08em;
   }
   * { box-sizing:border-box; }
   html { -webkit-text-size-adjust:100%; }
   body {
     margin:0; background:var(--bg); color:var(--ink);
-    font:400 15.5px/1.65 "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
-    -webkit-font-smoothing:antialiased;
+    font:400 16.5px/1.62 "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
   }
 
   /* --- masthead -------------------------------------------------------- */
   header.top {
-    background:var(--maroon); color:#fff;
-    border-bottom:3px solid var(--gold);
+    background:linear-gradient(160deg, var(--maroon) 0%, var(--maroon-deep) 100%);
+    color:#fff; border-bottom:3px solid var(--gold);
+    box-shadow:0 1px 0 rgba(0,0,0,.06);
   }
-  .top-inner { max-width:880px; margin:0 auto; padding:20px 24px; display:flex;
-               align-items:center; gap:14px; }
+  .top-inner { max-width:920px; margin:0 auto; padding:22px 28px; display:flex;
+               align-items:center; gap:16px; }
   .mark {
-    width:34px; height:34px; border-radius:9px; flex:none;
-    background:var(--gold); color:var(--maroon-deep);
-    display:grid; place-items:center; font-weight:700; font-size:13px;
-    letter-spacing:.02em;
+    width:42px; height:42px; border-radius:11px; flex:none;
+    background:var(--gold); color:#40200A;
+    display:grid; place-items:center; font-weight:700; font-size:15px;
+    letter-spacing:.01em; box-shadow:inset 0 -2px 0 rgba(0,0,0,.12);
   }
-  .top h1 { font-size:17px; font-weight:600; margin:0; letter-spacing:-.01em; }
-  .top .tag { font-size:12.5px; color:rgba(255,255,255,.72); margin-top:1px; }
+  .top h1 { font-size:20px; font-weight:650; margin:0; letter-spacing:-.015em; }
+  .top .tag { font-size:14px; color:rgba(255,255,255,.78); margin-top:2px; }
 
   /* --- thread ---------------------------------------------------------- */
-  .wrap { max-width:880px; margin:0 auto; padding:26px 24px 150px; }
-  .turn { margin-bottom:30px; }
-  .turn:last-child { margin-bottom:8px; }
+  .wrap { max-width:920px; margin:0 auto; padding:34px 28px 170px; }
+  .turn { margin-bottom:44px; }
+  .turn + .turn { border-top:1px solid var(--line); padding-top:38px; }
+  .turn:last-child { margin-bottom:10px; }
 
-  .ask {
-    display:flex; justify-content:flex-end; margin-bottom:14px;
-  }
+  .ask { display:flex; justify-content:flex-end; margin-bottom:20px; }
   .ask .bubble {
-    background:var(--maroon); color:#fff; padding:11px 16px;
-    border-radius:16px 16px 4px 16px; max-width:78%;
-    font-size:15px; box-shadow:var(--shadow); text-align:start;
+    background:var(--maroon); color:#fff; padding:13px 20px;
+    border-radius:18px 18px 5px 18px; max-width:76%;
+    font-size:var(--fs-body); font-weight:500; line-height:1.5;
+    box-shadow:var(--shadow); text-align:start;
   }
 
-  .reply { display:flex; gap:12px; align-items:flex-start; }
+  .reply { display:flex; gap:14px; align-items:flex-start; }
   .avatar {
-    width:28px; height:28px; border-radius:8px; flex:none; margin-top:2px;
+    width:34px; height:34px; border-radius:10px; flex:none; margin-top:2px;
     background:var(--maroon-soft); color:var(--maroon);
-    display:grid; place-items:center; font-size:11px; font-weight:700;
+    display:grid; place-items:center; font-size:12.5px; font-weight:700;
+    border:1px solid #EEDDE3;
   }
   .reply-body { flex:1; min-width:0; }
 
   .card {
     background:var(--panel); border:1px solid var(--line);
-    border-radius:var(--radius); box-shadow:var(--shadow);
-    padding:18px 20px; margin-bottom:12px;
+    border-radius:var(--r-lg); box-shadow:var(--shadow);
+    padding:22px 26px; margin-bottom:16px;
   }
-  .card.tight { padding:14px 18px; }
+  .card.tight { padding:18px 22px; }
   h3.section {
-    font-size:11px; text-transform:uppercase; letter-spacing:.09em;
-    color:var(--muted); margin:0 0 12px; font-weight:600;
+    font-size:12px; text-transform:uppercase; letter-spacing:var(--track);
+    color:var(--muted); margin:0 0 14px; font-weight:650;
   }
 
   /* --- composer -------------------------------------------------------- */
   .composer {
     position:fixed; left:0; right:0; bottom:0;
-    background:linear-gradient(to top, var(--bg) 62%, rgba(250,247,244,.92) 82%, rgba(250,247,244,0));
-    padding:30px 24px 22px;
+    background:linear-gradient(to top, var(--bg) 58%, rgba(250,246,243,.94) 80%, rgba(250,246,243,0));
+    padding:36px 28px 24px;
   }
   .composer form {
-    max-width:880px; margin:0 auto; display:flex; gap:10px;
+    max-width:920px; margin:0 auto; display:flex; gap:10px; align-items:center;
     background:var(--panel); border:1px solid var(--line);
-    border-radius:16px; padding:7px 7px 7px 8px; box-shadow:var(--shadow);
+    border-radius:16px; padding:8px 8px 8px 10px; box-shadow:var(--shadow-lg);
+    transition:border-color .15s, box-shadow .15s;
   }
   input[type=text] {
     flex:1; border:0; background:transparent; color:var(--ink);
-    font:inherit; padding:10px 10px; text-align:start; min-width:0;
+    font:inherit; font-size:var(--fs-body); padding:11px 8px;
+    text-align:start; min-width:0;
   }
   input[type=text]:focus { outline:none; }
-  .composer form:focus-within { border-color:var(--maroon); }
+  input[type=text]::placeholder { color:var(--muted); }
+  .composer form:focus-within {
+    border-color:var(--maroon); box-shadow:var(--shadow-lg), 0 0 0 3px var(--maroon-soft);
+  }
   button.send {
-    border:0; border-radius:11px; cursor:pointer; padding:10px 20px;
-    background:var(--maroon); color:#fff; font:600 14.5px/1 "Inter", sans-serif;
+    border:0; border-radius:12px; cursor:pointer; padding:12px 24px;
+    background:var(--maroon); color:#fff; font:650 15.5px/1 "Inter", sans-serif;
     transition:background .15s;
   }
   button.send:hover:not(:disabled) { background:var(--maroon-deep); }
-  button.send:disabled { opacity:.45; cursor:default; }
-  .status { max-width:880px; margin:9px auto 0; color:var(--muted);
-            font-size:13px; display:flex; align-items:center; gap:8px; }
-  .spin { width:7px; height:7px; border-radius:50%; background:var(--maroon);
+  button.send:disabled { opacity:.42; cursor:default; }
+  .status { max-width:920px; margin:12px auto 0; color:var(--muted);
+            font-size:var(--fs-sm); display:flex; align-items:center; gap:9px; }
+  .spin { width:8px; height:8px; border-radius:50%; background:var(--maroon);
           animation:p 1.1s ease-in-out infinite; flex:none; }
   @keyframes p { 0%,100%{opacity:.25} 50%{opacity:1} }
 
   /* --- interpreting ---------------------------------------------------- */
   .interpreting {
-    background:var(--gold-soft); border-left:3px solid var(--gold);
-    border-radius:0 10px 10px 0; padding:11px 14px; margin-bottom:12px;
-    font-size:13.5px;
+    background:var(--gold-soft); border:1px solid var(--gold-line);
+    border-radius:var(--r-md); padding:14px 18px; margin-bottom:16px;
+    font-size:var(--fs-sm); line-height:1.55;
   }
-  .interpreting b { font-weight:600; }
+  .interpreting b { font-weight:650; color:var(--ink); }
   .replay-badge {
-    display:inline-flex; align-items:center; gap:6px; font-size:12px;
+    display:inline-flex; align-items:center; gap:7px; font-size:var(--fs-xs);
     background:var(--maroon-soft); color:var(--maroon-deep);
-    padding:4px 10px; border-radius:20px; margin-bottom:10px; font-weight:500;
+    padding:6px 13px; border-radius:20px; margin-bottom:14px; font-weight:600;
+    border:1px solid #EEDDE3;
   }
 
-  /* --- plan ------------------------------------------------------------ */
-  .sg { display:flex; gap:11px; align-items:flex-start; padding:9px 0;
-        border-top:1px solid var(--line-soft); }
-  .sg:first-child { border-top:0; padding-top:0; }
-  .sg .dot { width:17px; height:17px; border-radius:50%; flex:none; margin-top:3px;
-             display:grid; place-items:center; font-size:10px; font-weight:700;
-             background:var(--line-soft); color:var(--muted); }
-  .sg.resolved .dot { background:var(--ok-soft); color:var(--ok); }
-  .sg.partial  .dot { background:var(--warn-bg); color:var(--warn); }
-  .sg.running  .dot { background:var(--maroon-soft); color:var(--maroon);
+  /* --- plan: a stepper ------------------------------------------------- */
+  .sg { display:flex; gap:14px; align-items:flex-start; padding:14px 0 14px; position:relative; }
+  .sg:first-child { padding-top:2px; }
+  .sg:last-child  { padding-bottom:2px; }
+  /* The rail is drawn by the step itself so it connects to the next one,
+     which is what makes this read as a sequence rather than a list. */
+  .sg::before {
+    content:""; position:absolute; inset-inline-start:12px; top:32px; bottom:-2px;
+    width:2px; background:var(--line);
+  }
+  .sg:first-child::before { top:20px; }
+  .sg:last-child::before  { display:none; }
+  .sg .dot {
+    width:26px; height:26px; border-radius:50%; flex:none; margin-top:0;
+    display:grid; place-items:center; font-size:12.5px; font-weight:700;
+    background:var(--panel); color:var(--muted); border:2px solid var(--line);
+    position:relative; z-index:1; font-variant-numeric:tabular-nums;
+  }
+  .sg.resolved .dot { background:var(--ok); color:#fff; border-color:var(--ok); }
+  .sg.partial  .dot { background:var(--warn-bg); color:var(--warn); border-color:#E3C685; }
+  .sg.not_available .dot, .sg.unresolved .dot, .sg.unreadable .dot {
+    background:var(--bad-soft); color:var(--bad); border-color:#EBC3BF; }
+  .sg.running  .dot { background:var(--maroon); color:#fff; border-color:var(--maroon);
                       animation:p 1.1s ease-in-out infinite; }
-  .sg .q { flex:1; text-align:start; font-size:14.5px; }
+  .sg .q { flex:1; text-align:start; font-size:var(--fs-body); line-height:1.5;
+           padding-top:1px; }
   .sg.pending .q { color:var(--muted); }
   .sg.running .q { font-weight:600; }
-  .sg .why2 { color:var(--muted); font-size:12.5px; margin-top:1px; }
-  .plan-why { font-size:12.5px; color:var(--muted); margin:-4px 0 12px; text-align:start; }
-  .plan-why b { color:var(--ink); font-weight:600; }
-  .budget { margin-top:12px; padding-top:11px; border-top:1px solid var(--line-soft);
-            font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums; }
-
-  /* --- trail ----------------------------------------------------------- */
-  details.trail > summary {
-    cursor:pointer; list-style:none; display:flex; align-items:center; gap:9px;
-    font-size:11px; text-transform:uppercase; letter-spacing:.09em;
-    color:var(--muted); font-weight:600;
+  .sg .why2 { color:var(--muted); font-size:var(--fs-xs); margin-top:4px; line-height:1.5; }
+  .plan-why { font-size:var(--fs-sm); color:var(--muted); margin:-4px 0 6px;
+              text-align:start; line-height:1.55; }
+  .plan-why b { color:var(--ink); font-weight:650; }
+  .plan-why .stamp {
+    display:inline-block; font-size:11.5px; font-weight:700; letter-spacing:.05em;
+    text-transform:uppercase; color:var(--maroon-deep); background:var(--maroon-soft);
+    border:1px solid #EEDDE3; border-radius:6px; padding:3px 8px;
+    margin-inline-end:8px; vertical-align:2px;
   }
+  .budget { margin-top:18px; padding-top:14px; border-top:1px solid var(--line-soft);
+            font-size:var(--fs-xs); color:var(--muted); font-variant-numeric:tabular-nums;
+            letter-spacing:.01em; }
+
+  /* --- trail: a timeline ----------------------------------------------- */
+  details.trail > summary {
+    cursor:pointer; list-style:none; display:flex; align-items:center; gap:10px;
+    font-size:12px; text-transform:uppercase; letter-spacing:var(--track);
+    color:var(--muted); font-weight:650;
+  }
+  details.trail > summary:hover { color:var(--ink); }
   details.trail > summary::-webkit-details-marker { display:none; }
   details.trail > summary::after {
-    content:"▸"; margin-inline-start:auto; font-size:12px;
+    content:"›"; margin-inline-start:auto; font-size:20px; line-height:1;
     transition:transform .15s; text-transform:none; letter-spacing:0;
+    color:var(--muted);
   }
   details.trail[open] > summary::after { transform:rotate(90deg); }
-  details.trail[open] > summary { margin-bottom:14px; }
-  .sgroup { margin-top:14px; padding-top:12px; border-top:1px solid var(--line-soft); }
+  details.trail[open] > summary { margin-bottom:18px; padding-bottom:14px;
+                                  border-bottom:1px solid var(--line-soft); }
+  .sgroup { margin-top:20px; padding-top:16px; border-top:1px solid var(--line-soft); }
   .sgroup:first-child { margin-top:0; padding-top:0; border-top:0; }
-  .sgroup > .head { font-size:12px; color:var(--muted); margin-bottom:8px; text-align:start; }
+  .sgroup > .head { font-size:var(--fs-xs); color:var(--muted); margin-bottom:12px;
+                    text-align:start; font-weight:600; letter-spacing:.01em; }
 
-  .hop { display:grid; grid-template-columns:26px 1fr; gap:0 12px; padding:11px 0; }
-  .hop + .hop { border-top:1px solid var(--line-soft); }
+  .hop { display:grid; grid-template-columns:30px 1fr; gap:0 14px;
+         padding:0 0 20px; position:relative; }
+  .hop:last-child { padding-bottom:2px; }
   .rail { grid-row:1 / span 3; position:relative; }
   .rail i {
-    position:absolute; inset-inline-start:9px; top:6px;
-    width:8px; height:8px; border-radius:50%; background:var(--maroon);
+    position:absolute; inset-inline-start:0; top:1px;
+    width:26px; height:26px; border-radius:50%;
+    background:var(--maroon-soft); color:var(--maroon-deep);
+    border:2px solid var(--panel); box-shadow:0 0 0 1.5px #E9D6DD;
+    display:grid; place-items:center; font-size:12px; font-weight:700;
+    font-variant-numeric:tabular-nums; font-style:normal;
   }
   .rail::before {
-    content:""; position:absolute; inset-inline-start:12.5px; top:16px; bottom:-14px;
-    width:1px; background:var(--line);
+    content:""; position:absolute; inset-inline-start:12px; top:29px; bottom:-8px;
+    width:2px; background:var(--line);
   }
   .hop:last-child .rail::before { display:none; }
-  .hopline { display:flex; align-items:baseline; gap:9px; flex-wrap:wrap; }
-  .num { color:var(--muted); font-size:11.5px; font-variant-numeric:tabular-nums; }
-  .label { font-weight:600; font-size:14.5px; }
+  .hopline { display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+             min-height:28px; }
+  .label { font-weight:650; font-size:var(--fs-body); line-height:1.35; }
   .badge {
-    font-size:10px; text-transform:uppercase; letter-spacing:.06em; font-weight:600;
-    padding:2px 8px; border-radius:20px; color:var(--ink);
+    font-size:11px; text-transform:uppercase; letter-spacing:.06em; font-weight:700;
+    padding:3px 9px; border-radius:20px;
   }
-  .badge.nav{background:var(--nav)} .badge.body{background:var(--body)} .badge.footer{background:var(--footer)}
+  .badge.nav{background:var(--nav);color:var(--nav-ink)}
+  .badge.body{background:var(--body);color:var(--body-ink)}
+  .badge.footer{background:var(--footer);color:var(--footer-ink)}
   /* The reasoning is the point of the whole screen: it is what shows the
      agent deciding rather than a script running. Given room accordingly. */
-  .why { margin-top:5px; font-size:14px; color:var(--ink); text-align:start; }
-  .meta { margin-top:5px; color:var(--muted); font-size:11.5px;
+  .why { margin-top:7px; font-size:var(--fs-sm); color:var(--ink-2);
+         text-align:start; line-height:1.55; }
+  .meta { margin-top:9px; color:var(--muted); font-size:var(--fs-xs);
           font-variant-numeric:tabular-nums; word-break:break-all;
-          display:flex; flex-wrap:wrap; gap:4px 10px; }
-  .conf { display:inline-flex; align-items:center; gap:5px; }
-  .conf b { width:34px; height:3px; border-radius:2px; background:var(--line);
+          display:flex; flex-wrap:wrap; gap:5px 8px; align-items:center; }
+  .meta > span { display:inline-flex; align-items:center; }
+  .meta > span + span::before {
+    content:"·"; margin:0 8px 0 0; color:var(--line); font-weight:700;
+  }
+  .meta .url { color:var(--muted); }
+  .conf { display:inline-flex; align-items:center; gap:6px; }
+  .conf b { width:42px; height:4px; border-radius:2px; background:var(--line);
             display:inline-block; overflow:hidden; }
   .conf b i { display:block; height:100%; background:var(--maroon); }
   /* dir="auto" is per-string by definition: the browser picks direction from
@@ -198,82 +267,175 @@
   .meta, .badge, ul.sources { direction:ltr; text-align:left; }
 
   .gate {
-    margin:9px 0 0 38px; padding:10px 12px; font-size:12.5px;
-    background:var(--warn-bg); border-left:3px solid var(--warn);
-    border-radius:0 8px 8px 0;
+    margin:2px 0 20px 44px; padding:13px 16px; font-size:var(--fs-xs);
+    background:var(--warn-bg); border:1px solid var(--gold-line);
+    border-radius:var(--r-sm); line-height:1.55;
   }
-  .expanded { font-size:12px; color:var(--muted); padding:9px 0 0 38px; }
+  .gate b { color:var(--ink); }
+  .expanded { font-size:var(--fs-xs); color:var(--muted); padding:4px 0 0 44px; }
 
-  /* --- answer ---------------------------------------------------------- */
-  .card.answer-card { border-inline-start:3px solid var(--maroon); }
-  .card.answer-card.none { border-inline-start-color:var(--muted); }
-  .answer { font-size:15.5px; text-align:start; }
-  .answer p  { margin:0 0 9px; }
-  .answer h4 { margin:16px 0 6px; font-size:11px; text-transform:uppercase;
-               letter-spacing:.09em; color:var(--maroon); font-weight:700; }
+  /* --- the answer card -------------------------------------------------- */
+  /* The card is banded rather than padded: a header that names it, the
+     answer at full size, and the evidence beneath on a sunk ground. */
+  .answer-card { padding:0; overflow:hidden; border-top:3px solid var(--maroon); }
+  .answer-card.none { border-top-color:var(--muted); }
+  .answer-head {
+    display:flex; align-items:center; gap:10px;
+    padding:15px 26px; background:var(--bg-sunk);
+    border-bottom:1px solid var(--line);
+  }
+  .answer-head .ttl {
+    font-size:12px; text-transform:uppercase; letter-spacing:var(--track);
+    font-weight:700; color:var(--maroon-deep);
+  }
+  .answer-card.none .answer-head .ttl { color:var(--muted); }
+  .answer-main { padding:24px 26px 22px; }
+  .answer { font-size:var(--fs-answer); line-height:1.62; text-align:start; }
+  .answer p  { margin:0 0 12px; }
+  .answer h4 { margin:22px 0 9px; font-size:12px; text-transform:uppercase;
+               letter-spacing:var(--track); color:var(--maroon); font-weight:700; }
   .answer h4:first-child { margin-top:0; }
-  .answer ul { margin:0 0 9px; padding-inline-start:20px; }
-  .answer li { margin:3px 0; }
+  .answer ul { margin:0 0 12px; padding-inline-start:22px; }
+  .answer li { margin:5px 0; }
   .answer > *:last-child { margin-bottom:0; }
 
-  /* Derived statements: set apart from the facts, and labelled in place. */
-  .derived { margin-top:16px; padding:12px 14px; border-radius:0 10px 10px 0;
-             border-inline-start:3px solid var(--gold); background:var(--gold-soft); }
-  .derived.judgment { border-inline-start-width:5px; }
-  .derived .kicker { font-size:10.5px; text-transform:uppercase; letter-spacing:.07em;
-                     font-weight:700; color:var(--warn); margin-bottom:6px; text-align:start; }
-  .derived .answer { font-size:15px; }
+  /* Label/value lines rendered as rows. The text is exactly what the pipeline
+     produced -- the colon is a column break, not an edit -- but twenty of them
+     stacked as paragraphs read as a wall, and as rows they read as a schedule
+     of fees, which is what they are. */
+  .pairs { margin:2px 0 14px; border-top:1px solid var(--line-soft); }
+  .pairs > .row {
+    display:grid; grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);
+    gap:6px 20px; padding:11px 2px; border-bottom:1px solid var(--line-soft);
+    font-size:var(--fs-body); line-height:1.5;
+  }
+  /* min-width:0 lets a grid column actually shrink, and anywhere-wrapping
+     keeps an unbroken token (a URL, a template placeholder) inside the card
+     instead of running off its edge. */
+  .pairs > .row > .k, .pairs > .row > .v {
+    min-width:0; overflow-wrap:anywhere; text-align:start;
+  }
+  .pairs > .row > .k { color:var(--ink-2); }
+  .pairs > .row > .v { font-weight:650; font-variant-numeric:tabular-nums;
+                       color:var(--ink); }
 
-  .support { display:flex; align-items:center; gap:10px; flex-wrap:wrap;
-             margin-top:16px; padding-top:14px; border-top:1px solid var(--line-soft);
-             font-size:12.5px; color:var(--muted); font-variant-numeric:tabular-nums; }
-  .bar { flex:1; min-width:80px; max-width:170px; height:6px; border-radius:4px;
-         background:var(--line); overflow:hidden; direction:ltr; }
-  .bar > i { display:block; height:100%; background:var(--ok); }
+  /* Derived statements: an extra layer of insight, set apart from the facts
+     and labelled in place. Deliberately not the warning palette -- the point
+     is "here is what the agent worked out", not "be careful". */
+  .derived {
+    margin-top:22px; padding:16px 20px; border-radius:var(--r-md);
+    background:var(--insight-bg); border:1px solid var(--insight-line);
+    border-inline-start:4px solid var(--maroon);
+  }
+  .derived.judgment { border-inline-start-color:var(--gold); }
+  .derived .kicker { margin-bottom:10px; text-align:start; }
+  .derived .kicker .k-label {
+    display:inline-block; font-size:11.5px; text-transform:uppercase;
+    letter-spacing:.07em; font-weight:700; color:#fff; background:var(--maroon);
+    border-radius:6px; padding:4px 10px;
+  }
+  .derived.judgment .kicker .k-label { background:var(--gold); }
+  .derived .kicker .k-note {
+    display:block; margin-top:7px; font-size:var(--fs-xs); color:var(--muted);
+    line-height:1.5;
+  }
+  .derived .answer { font-size:var(--fs-body); }
+
+  /* --- the evidence footer --------------------------------------------- */
+  .answer-foot {
+    padding:18px 26px 20px; background:var(--bg-sunk);
+    border-top:1px solid var(--line);
+  }
+  .answer-foot > *:first-child { margin-top:0; }
+  .support { display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+             font-size:var(--fs-sm); color:var(--ink-2);
+             font-variant-numeric:tabular-nums; }
+  .support .n { font-weight:650; color:var(--ink); }
+  .bar { flex:1; min-width:90px; max-width:190px; height:8px; border-radius:5px;
+         background:#E2DAD5; overflow:hidden; direction:ltr; }
+  .bar > i { display:block; height:100%; background:var(--ok); border-radius:5px; }
   .bar.warn > i { background:var(--warn); }
   .bar.bad  > i { background:var(--bad); }
-  .caveat { margin-top:7px; font-size:12.5px; color:var(--muted); }
-  .caveat b { color:var(--ink); font-weight:600; }
+  .caveat { margin-top:9px; font-size:var(--fs-xs); color:var(--muted); line-height:1.55; }
+  .caveat b { color:var(--ink); font-weight:650; }
 
-  details.struck { margin-top:8px; font-size:12.5px; }
+  details.struck { margin-top:11px; font-size:var(--fs-xs); }
   details.struck > summary { cursor:pointer; color:var(--muted); }
   details.struck > summary:hover { color:var(--ink); }
-  details.struck ul { margin:9px 0 0; padding-inline-start:18px; }
-  details.struck li { margin:7px 0; }
+  details.struck ul { margin:11px 0 0; padding-inline-start:20px; }
+  details.struck li { margin:9px 0; }
   .struck-text { display:block; text-decoration:line-through; opacity:.7; }
-  .struck-why  { display:block; color:var(--muted); font-size:11.5px; }
+  .struck-why  { display:block; color:var(--muted); font-size:12.5px; margin-top:2px; }
 
-  ul.sources, ul.gaps { margin:0; padding-inline-start:20px; font-size:13.5px; }
+  ul.sources, ul.gaps { margin:0; padding-inline-start:22px; font-size:var(--fs-sm);
+                        line-height:1.6; }
   ul.sources { word-break:break-all; }
-  ul.sources a { color:var(--maroon); }
-  ul.gaps { color:var(--muted); }
-  .verdict-bad { border-inline-start:3px solid var(--bad); }
-  .verdict-bad h4 { margin:0 0 4px; font-size:15px; }
+  ul.sources li { margin:7px 0; }
+  ul.sources a { color:var(--maroon); text-decoration-color:#D9B9C4;
+                 text-underline-offset:2px; }
+  ul.sources a:hover { color:var(--maroon-deep); }
+  ul.gaps { color:var(--ink-2); }
+  ul.gaps li { margin:7px 0; }
+  .verdict-bad { border-inline-start:4px solid var(--bad); }
+  .verdict-bad h4 { margin:0 0 8px; font-size:var(--fs-answer); font-weight:650; }
+  .verdict-bad p { margin:0; font-size:var(--fs-body); }
 
-  @media (max-width:640px) {
-    .wrap { padding:20px 16px 150px; }
-    /* The masthead keeps its own padding here: stripping it clipped the
-       strapline against the right edge. Only the composer needs narrowing. */
-    .top-inner { padding:16px; }
-    .top .tag { font-size:12px; }
-    .composer { padding:12px 12px 16px; }
+  @media (max-width:680px) {
+    :root { --fs-answer:17px; --fs-body:15.5px; --fs-sm:14px; --fs-xs:12.5px; }
+    body { font-size:16px; }
+    .wrap { padding:24px 16px 160px; }
+    .top-inner { padding:18px 16px; gap:12px; }
+    .mark { width:38px; height:38px; }
+    .top h1 { font-size:18px; }
+    .top .tag { font-size:13px; }
+    .composer { padding:16px 14px 18px; }
     .ask .bubble { max-width:88%; }
-    .hop { grid-template-columns:20px 1fr; gap:0 8px; }
+    .reply { gap:10px; }
+    .avatar { width:28px; height:28px; font-size:11px; }
+    .card { padding:18px 18px; border-radius:var(--r-md); }
+    .answer-head, .answer-main, .answer-foot { padding-left:18px; padding-right:18px; }
+    .hop { grid-template-columns:26px 1fr; gap:0 10px; }
+    .rail i { width:23px; height:23px; font-size:11px; }
+    .rail::before { inset-inline-start:10.5px; }
+    .gate, .expanded { margin-inline-start:36px; padding-inline-start:36px; }
+    .gate { margin-inline-start:0; padding:12px 14px; }
+    .expanded { padding-inline-start:36px; }
+    /* One column: a 1.35fr/1fr split leaves no room for either half here. */
+    .pairs > .row { grid-template-columns:1fr; gap:2px; padding:10px 2px; }
+    .pairs > .row > .k { font-size:var(--fs-sm); }
   }
 
   @media (prefers-color-scheme: dark) {
     :root {
-      --maroon:#C4405F; --maroon-deep:#A82B48; --maroon-soft:#33161F;
-      --gold:#D9B84A; --gold-soft:#2C2616;
-      --bg:#141113; --panel:#1C181A; --ink:#EFE9EA; --muted:#9A9094;
-      --line:#2C2528; --line-soft:#241E21;
-      --ok:#5FC98D; --ok-soft:#16301F; --warn:#DBAE4E; --warn-bg:#2A2416; --bad:#F08A8A;
-      --nav:#272044; --body:#173026; --footer:#33201D;
-      --shadow:0 1px 2px rgba(0,0,0,.3), 0 6px 20px rgba(0,0,0,.25);
+      --maroon:#C9556F; --maroon-deep:#B03C58; --maroon-soft:#38181F;
+      --gold:#D9B24A; --gold-line:#5A4A20; --gold-soft:#2B2415;
+
+      --bg:#141012; --bg-sunk:#191416; --panel:#1D1719;
+      --ink:#F0EAEB; --ink-2:#CFC5C8; --muted:#9C9296;
+      --line:#2E2528; --line-soft:#261F22;
+
+      --ok:#5FC98D; --ok-soft:#16301F; --warn:#DFB157; --warn-bg:#2A2315;
+      --bad:#F0908E; --bad-soft:#331B1B;
+
+      --nav:#282152; --nav-ink:#BFB4F0; --body:#153025; --body-ink:#89D7B0;
+      --footer:#37211C; --footer-ink:#EDA684;
+
+      --insight-bg:#221A1D; --insight-line:#38292E;
+
+      --shadow-sm:0 1px 2px rgba(0,0,0,.4);
+      --shadow:0 1px 2px rgba(0,0,0,.35), 0 8px 24px -8px rgba(0,0,0,.5);
+      --shadow-lg:0 2px 4px rgba(0,0,0,.4), 0 18px 44px -14px rgba(0,0,0,.6);
     }
-    header.top { background:#3A0F1E; }
-    .composer { background:linear-gradient(to top, var(--bg) 62%, rgba(20,17,19,.92) 82%, rgba(20,17,19,0)); }
-    .ask .bubble { background:var(--maroon-deep); }
+    header.top { background:linear-gradient(160deg, #4A1223 0%, #300B17 100%); }
+    .mark { color:#2A1405; }
+    .composer { background:linear-gradient(to top, var(--bg) 58%, rgba(20,16,18,.94) 80%, rgba(20,16,18,0)); }
+    .ask .bubble { background:var(--maroon-deep); color:#fff; }
+    .avatar { border-color:#3A252C; }
+    .replay-badge { border-color:#3A252C; }
+    .bar { background:#33292D; }
+    .rail i { box-shadow:0 0 0 1.5px #3A252C; }
+    .derived .kicker .k-label { color:#22181B; }
+    .plan-why .stamp { border-color:#3A252C; }
   }
 </style>
 </head>
@@ -331,29 +493,64 @@ function humaniseLabels(text) {
   });
 }
 
+// Presentation only: a "Label: value" line becomes a two-column row. Not a
+// single character is added, removed or reordered — the colon that was already
+// in the text is used as the column break. Twenty fee lines stacked as
+// paragraphs read as a wall; as rows they read as the schedule of fees they
+// are. The label half is capped short and must not look like a sentence, so
+// prose that happens to contain a colon stays prose.
+const PAIR = /^([^:]{2,100}):\s+(\S.*)$/;
+function asPair(line) {
+  const m = line.match(PAIR);
+  if (!m) return null;
+  const key = m[1];
+  // A label is a name, not a clause: no sentence punctuation, and not a
+  // bullet or heading (those are handled before this is ever reached). The
+  // terminator has to be followed by a space or end the label -- otherwise
+  // "Cash withdrawals through BM ATMs and P.O.S and other banks" is thrown
+  // out over an abbreviation.
+  if (/[.!?;](\s|$)|^\s*[-*#]/.test(key)) return null;
+  // `raw` is kept so the fallback below can put the line back byte for byte.
+  return { k: key.trim(), v: m[2].trim(), raw: line };
+}
+
 // A deliberately tiny markdown renderer: bold, headings, bullets, paragraphs.
 // The composer is asked for grouped output with short bold headings, and this
 // is what makes that structure visible instead of a run-on paragraph.
 // Everything is escaped first, so only the patterns below can produce markup —
 // model output is never inserted as HTML.
 function md(text) {
-  return esc(humaniseLabels(text)).split(/\n{2,}/).map((block) => {
-    const lines = block.split("\n").filter((l) => l.trim());
-    if (!lines.length) return "";
-    const out = []; let list = [];
-    const flush = () => { if (list.length) { out.push(`<ul>${list.join("")}</ul>`); list = []; } };
-    for (const line of lines) {
-      const heading = line.match(/^\s*(#{1,6})\s+(.*)$/);
-      const bold    = line.match(/^\s*\*\*(.+?)\*\*\s*:?\s*$/);
-      const bullet  = line.match(/^\s*[-*]\s+(.*)$/);
-      if (heading)     { flush(); out.push(`<h4>${inline(heading[2])}</h4>`); }
-      else if (bold)   { flush(); out.push(`<h4>${inline(bold[1])}</h4>`); }
-      else if (bullet) { list.push(`<li>${inline(bullet[1])}</li>`); }
-      else             { flush(); out.push(`<p>${inline(line)}</p>`); }
+  // Blocks are joined back into one line stream first, so a run of pair lines
+  // is still a run when the composer separated each with a blank line.
+  const lines = esc(humaniseLabels(text)).split(/\n+/).filter((l) => l.trim());
+  const out = []; let list = [], pairs = [];
+  const flushList  = () => { if (list.length)  { out.push(`<ul>${list.join("")}</ul>`); list = []; } };
+  // One lone pair is just a sentence with a colon in it; two or more in a row
+  // are a table. Below the threshold they go back to being paragraphs.
+  const flushPairs = () => {
+    if (pairs.length >= 2) {
+      out.push(`<div class="pairs">${pairs.map((p) =>
+        `<div class="row"><span class="k">${inline(p.k)}</span>` +
+        `<span class="v">${inline(p.v)}</span></div>`).join("")}</div>`);
+    } else {
+      pairs.forEach((p) => out.push(`<p>${inline(p.raw)}</p>`));
     }
-    flush();
-    return out.join("");
-  }).join("");
+    pairs = [];
+  };
+  const flush = () => { flushList(); flushPairs(); };
+  for (const line of lines) {
+    const heading = line.match(/^\s*(#{1,6})\s+(.*)$/);
+    const bold    = line.match(/^\s*\*\*(.+?)\*\*\s*:?\s*$/);
+    const bullet  = line.match(/^\s*[-*]\s+(.*)$/);
+    const pair    = (heading || bold || bullet) ? null : asPair(line);
+    if (heading)     { flush(); out.push(`<h4>${inline(heading[2])}</h4>`); }
+    else if (bold)   { flush(); out.push(`<h4>${inline(bold[1])}</h4>`); }
+    else if (bullet) { flushPairs(); list.push(`<li>${inline(bullet[1])}</li>`); }
+    else if (pair)   { flushList(); pairs.push(pair); }
+    else             { flush(); out.push(`<p>${inline(line)}</p>`); }
+  }
+  flush();
+  return out.join("");
 }
 const inline = (s) => s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
 
@@ -449,13 +646,16 @@ function showResolved(d) {
 function renderPlan() {
   if (!turn || !turn.plan.order.length) return;
   turn.planCard.hidden = false;
-  turn.sgs.innerHTML = turn.plan.order.map((id) => {
+  turn.sgs.innerHTML = turn.plan.order.map((id, i) => {
     const sg = turn.plan.byId[id], state = sg.status || "pending";
     // While a sub-goal is still queued its own rationale is the useful line;
     // once it has run, what happened to it is.
     const note = sg.reason || (state === "pending" && sg.why) || SG_WORD[state] || "";
+    // The step number stands in until there is an outcome mark, so the panel
+    // reads as an ordered plan from the moment it appears.
+    const mark = SG_MARK[state] || String(i + 1);
     return `<div class="sg ${esc(state)}">` +
-      `<span class="dot">${SG_MARK[state] || ""}</span>` +
+      `<span class="dot">${mark}</span>` +
       `<span class="q"><span dir="auto">${esc(sg.question)}</span>` +
       `<div class="why2" dir="auto">${esc(note)}</div></span></div>`;
   }).join("");
@@ -473,9 +673,9 @@ function showPlan(d) {
   // planning would be the same kind of overclaim as a green bar over zero
   // claims, so the label is not optional.
   turn.planWhy.innerHTML = d.plan_source === "model"
-    ? `<div class="plan-why"><b>Decomposed by the model</b>` +
-      (d.plan_reasoning ? ` — <span dir="auto">${esc(d.plan_reasoning)}</span>` : "") + `</div>`
-    : `<div class="plan-why">Decomposed by keyword rules.</div>`;
+    ? `<div class="plan-why"><span class="stamp">Decomposed by the model</span>` +
+      (d.plan_reasoning ? `<span dir="auto">${esc(d.plan_reasoning)}</span>` : "") + `</div>`
+    : `<div class="plan-why"><span class="stamp">Decomposed by keyword rules</span></div>`;
   renderPlan(); showBudget(d);
 }
 
@@ -583,11 +783,11 @@ function addHop(d) {
   el.className = "hop";
   el.dataset.url = d.url;                    // so a gate notice can find its page
   el.innerHTML =
-    `<div class="rail"><i></i></div><div>` +
-      `<div class="hopline"><span class="num">hop ${d.hop}</span>` +
+    `<div class="rail"><i>${d.hop}</i></div><div>` +
+      `<div class="hopline">` +
       `<span class="label" dir="auto">${label}</span>${badge}</div>` +
       `<div class="why" dir="auto">${esc(d.reasoning)}</div>` +
-      `<div class="meta"><span>${esc(d.url)}</span><span>${d.status}</span>` +
+      `<div class="meta"><span class="url">${esc(d.url)}</span><span>${d.status}</span>` +
       `<span>${d.links_found} links</span>` +
       (d.hop > 0 ? `<span>${d.candidates_offered}/${d.candidates_available} candidates</span>${conf}` : "") +
     `</div></div>`;
@@ -601,9 +801,14 @@ function addHop(d) {
 // the block rather than carried by colour alone — colour fails in a screenshot
 // and for a colour-blind reader, and a legend elsewhere on the page is a
 // legend nobody reads.
+// Same words as before, split at the dash so the label can be a chip and the
+// qualification can sit under it. Neither half is optional: the label alone
+// would not say what warranty it carries.
 const TIER_KICKER = {
-  analysis: "The agent's reading — worked out from the facts above, not stated on any page",
-  judgment: "Recommendation — the agent's opinion, not the bank's",
+  analysis: { label: "The agent's reading",
+              note:  "worked out from the facts above, not stated on any page" },
+  judgment: { label: "Recommendation",
+              note:  "the agent's opinion, not the bank's" },
 };
 
 function answerBody(d) {
@@ -614,9 +819,11 @@ function answerBody(d) {
   for (const tier of ["analysis", "judgment"]) {
     const lines = tiers[tier];
     if (!lines || !lines.length) continue;
+    const k = TIER_KICKER[tier];
     html +=
       `<div class="derived ${tier}">` +
-        `<div class="kicker">${esc(TIER_KICKER[tier])}</div>` +
+        `<div class="kicker"><span class="k-label">${esc(k.label)}</span>` +
+        `<span class="k-note">${esc(k.note)}</span></div>` +
         `<div class="answer" dir="auto">${md(lines.join("\n"))}</div>` +
       `</div>`;
   }
@@ -652,7 +859,7 @@ function showAnswer(d) {
     support =
       `<div class="support"><span>Facts whose value was found on the page they cite</span>` +
       `<span class="bar ${cls}"><i style="width:${pct}%"></i></span>` +
-      `<span>${d.claims_supported}/${d.claims_total} (${pct}%)</span></div>` +
+      `<span class="n">${d.claims_supported}/${d.claims_total} (${pct}%)</span></div>` +
       // Says what the bar covers. Figures are checked in all three tiers; the
       // inference in a derived sentence is never checked, and the bar must not
       // be read as vouching for it.
@@ -691,13 +898,20 @@ function showAnswer(d) {
       `appear on the page — no wording was generated.</div>`;
   }
 
+  // Three bands: what was found, then how it was made and how well it is
+  // backed. Same information as before, in the order a reader needs it —
+  // the answer first at full size, the warranty underneath and quieter.
+  const evidence =
+    support + provenance +
+    (d.budget_exhausted ? `<div class="caveat">Stopped early: ${esc(d.budget_exhausted)}.</div>` : "") +
+    (d.gate_rejections ? `<div class="caveat">${d.gate_rejections} page(s) were accepted by ` +
+      `the validator and rejected here as site navigation.</div>` : "");
+
   turn.final.innerHTML =
     `<div class="card answer-card${d.resolved_count ? "" : " none"}">` +
-      answerBody(d) +
-      support + provenance +
-      (d.budget_exhausted ? `<div class="caveat">Stopped early: ${esc(d.budget_exhausted)}.</div>` : "") +
-      (d.gate_rejections ? `<div class="caveat">${d.gate_rejections} page(s) were accepted by ` +
-        `the validator and rejected here as site navigation.</div>` : "") +
+      `<div class="answer-head"><span class="ttl">Answer</span></div>` +
+      `<div class="answer-main">${answerBody(d)}</div>` +
+      `<div class="answer-foot">${evidence}</div>` +
     `</div>` +
     (sources ? `<div class="card tight"><h3 class="section">Sources cited</h3>` +
                `<ul class="sources">${sources}</ul></div>` : "") +
