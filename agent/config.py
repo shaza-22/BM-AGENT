@@ -74,6 +74,23 @@ def seed_for(language: str | None) -> str:
 # a linked fee PDF adds a 4th, so 5 leaves one spare for a wrong turn.
 MAX_HOPS = 5
 MAX_PAGES = 15
+
+# --- Narrowing follow-ups ----------------------------------------------------
+# A category hub satisfies the deterministic validator -- it carries real
+# substance about the topic -- even when the question asked about one family
+# listed on it. The run then stops one hop short of the page that answers it.
+#
+# When this is on, a resolve on such a page is *deferred* rather than taken:
+# the agent follows the narrower link, and if the deeper page resolves, that
+# wins; if it does not, the deferred verdict is used exactly as it would have
+# been. So the worst case is one extra fetch, never a lost answer. See
+# agent/narrowing.py for how "narrower" is decided without any vocabulary.
+#
+# The deeper hop is chosen by URL structure, not by the model, so it costs
+# zero extra LLM calls. One deferral per sub-goal is the cap: this exists to
+# fix "stopped one hop early", not to license open-ended digging.
+DEEPEN_ON_NARROWING = True
+MAX_NARROWING_DEFERRALS = 1
 # Measured on the real homepage: 50 candidates is ~5.6k characters, roughly
 # 1,400-1,650 prompt tokens. See README for the per-hop cost.
 CANDIDATE_LIMIT = 50

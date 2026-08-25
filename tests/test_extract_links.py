@@ -6,6 +6,7 @@ smallest markup that reproduces it.
 
 from __future__ import annotations
 
+from browsing import config
 from browsing.extract_links import canonical_key, extract_links, is_pdf_hint, slug_label
 
 HOME = "https://www.banquemisr.com/"
@@ -230,3 +231,52 @@ class TestAgainstFixtures:
         assert all(link["label"].strip() for link in links)
         assert not any("facebook" in link["url"] for link in links)
         assert not any("ar-eg" in link["url"].lower() for link in links)
+
+
+class TestRepeatedLabelDisambiguation:
+    """Same text, different destinations -- the selector needs a tiebreak.
+
+    Sitecore builds category tiles from one template, so every tile on a hub
+    reads "View more details". A label shared by eleven links identifies none
+    of them.
+    """
+
+    HTML = """
+    <html><body><main>
+      <a href="/things/red">More details</a>
+      <a href="/things/blue">More details</a>
+      <a href="/things/green">Green things</a>
+      <a href="/help">Help</a>
+    </main></body></html>
+    """
+
+    def links(self):
+        return {
+            l["url"].rsplit("/", 1)[-1]: l["label"]
+            for l in extract_links(self.HTML, "https://www.banquemisr.com/")
+        }
+
+    def test_repeated_labels_gain_what_the_url_says(self):
+        labels = self.links()
+        assert labels["red"] == "More details - Red"
+        assert labels["blue"] == "More details - Blue"
+
+    def test_a_label_that_appears_once_is_untouched(self):
+        labels = self.links()
+        assert labels["green"] == "Green things"
+        assert labels["help"] == "Help"
+
+    def test_nothing_is_appended_when_the_slug_only_repeats_the_label(self):
+        html = """
+        <html><body><main>
+          <a href="/news">News</a>
+          <a href="/press/news">News</a>
+        </main></body></html>
+        """
+        assert [
+            l["label"] for l in extract_links(html, "https://www.banquemisr.com/")
+        ] == ["News", "News"]
+
+    def test_the_flag_restores_the_raw_anchor_text(self, monkeypatch):
+        monkeypatch.setattr(config, "DISAMBIGUATE_REPEATED_LABELS", False)
+        assert self.links()["red"] == "More details"

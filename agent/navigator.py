@@ -52,6 +52,7 @@ from agent.link_selector import (
 )
 from agent.llm import LLMClient, LLMError
 from agent.messages import message
+from agent.narrowing import find_narrowing_link
 from agent.trail_log import StepLogger
 from browsing.extract_links import alias_key, canonical_key, extract_links, normalize_url
 from browsing import config as browsing_config
@@ -221,6 +222,35 @@ class Navigator:
         """
         validate = validate_fn or self._validate_fn or always_unresolved
 
+        # A resolve that was put on hold so the agent could look one hop
+        # deeper. It is never discarded: `finish` below hands it back for any
+        # ending other than a better resolve, so deferring can cost a fetch
+        # but can never cost the answer. See agent/narrowing.py.
+        deferred: dict | None = None
+        deferrals = 0
+
+        def finish(
+            status: NavigationStatus,
+            page: PageDict | None,
+            *args: Any,
+            **kwargs: Any,
+        ) -> NavigationResult:
+            # "blocked" is excluded on purpose: a WAF block aborts the whole
+            # run upstream, and dressing it up as a resolve would hide that.
+            if deferred is not None and status not in ("resolved", "blocked"):
+                logger.info(
+                    "using the resolve deferred at %s -- the deeper page ended %r",
+                    deferred["page"]["url"], status,
+                )
+                kwargs.pop("cap_hit", None)
+                kwargs["final_reasoning"] = deferred["reason"]
+                trail, pages_fetched, hops_used = args[0], args[1], args[2]
+                return self._finish(
+                    "resolved", deferred["page"], trail, pages_fetched,
+                    hops_used, deferred["extracted"], *args[4:], **kwargs
+                )
+            return self._finish(status, page, *args, **kwargs)
+
         visited: set[str] = set()
         alias_visited: set[str] = set()
         frontier: dict[str, Candidate] = {}
@@ -286,7 +316,7 @@ class Navigator:
                 trail.append(step)
                 self._log.emit("step", **step.to_dict())
                 logger.warning("WAF block page detected at %s -- aborting run", page["url"])
-                return self._finish(
+                return finish(
                     "blocked", None, trail, pages_fetched, hops_used, None, sub_goal, run_started=run_started, nav_link_extract_s=nav_link_extract_s,
                     final_reasoning=message("blocked", self.language),
                 )
@@ -302,10 +332,79 @@ class Navigator:
             self._log.emit("step", **step.to_dict())
 
             if resolved:
-                return self._finish(
+                narrower = (
+                    find_narrowing_link(
+                        sub_goal, page["url"], links, visited, key_of=canonical_key
+                    )
+                    if (
+                        config.DEEPEN_ON_NARROWING
+                        and deferred is None
+                        and deferrals < config.MAX_NARROWING_DEFERRALS
+                        and hops_used < self._max_hops
+                        and pages_fetched < self._max_pages
+                    )
+                    else None
+                )
+                if narrower is not None:
+                    # Hold the resolve, do not spend it. `finish` hands it back
+                    # for any ending short of a better resolve, so this is a
+                    # free look: one fetch, and no model call, because the hop
+                    # was chosen from the URL structure rather than by asking.
+                    deferred = {
+                        # Cleared on the next iteration; while it is set, a
+                        # non-resolving deeper page ends the run immediately.
+                        "awaiting": True,
+                        "page": page,
+                        "extracted": verdict.get("extracted") or {},
+                        "reason": str(verdict.get("reason") or "sub-goal resolved"),
+                    }
+                    deferrals += 1
+                    logger.info(
+                        "deferring the resolve at %s: %r looks more specifically "
+                        "about %r",
+                        page["url"], narrower["label"], sub_goal,
+                    )
+                    self._log.emit(
+                        "deepen",
+                        sub_goal=sub_goal,
+                        from_url=page["url"],
+                        chosen_url=narrower["url"],
+                        chosen_label=narrower["label"],
+                        deferred_reason=deferred["reason"],
+                    )
+                    current_page = page
+                    self._grow_frontier(
+                        frontier, links, page["url"], len(trail) - 1, visited
+                    )
+                    pending = Selection(
+                        url=narrower["url"],
+                        label=narrower["label"],
+                        reasoning=(
+                            "the page resolved, but this link is more "
+                            "specifically about what was asked"
+                        ),
+                        confidence=0.0,
+                        outcome="follow",
+                    )
+                    hops_used += 1
+                    next_url = narrower["url"]
+                    continue
+                return finish(
                     "resolved", page, trail, pages_fetched, hops_used,
                     verdict.get("extracted") or {}, sub_goal, run_started=run_started, nav_link_extract_s=nav_link_extract_s,
                     final_reasoning=str(verdict.get("reason") or "sub-goal resolved"),
+                )
+
+            if deferred is not None and deferred.pop("awaiting", False):
+                # The deeper page did not resolve. Stop here rather than let a
+                # deferral turn a one-hop run into a full search: `finish`
+                # hands back the held verdict, so the whole detour costs one
+                # fetch and no model call, win or lose.
+                return finish(
+                    "arrived", page, trail, pages_fetched, hops_used, None,
+                    sub_goal, run_started=run_started,
+                    nav_link_extract_s=nav_link_extract_s,
+                    final_reasoning="the narrower page did not resolve",
                 )
 
             if page["ok"]:
@@ -317,13 +416,13 @@ class Navigator:
                 logger.info("dead end at %s (%s)", page["url"], page["error"])
 
             if hops_used >= self._max_hops:
-                return self._finish(
+                return finish(
                     "exhausted", None, trail, pages_fetched, hops_used, None, sub_goal, run_started=run_started, nav_link_extract_s=nav_link_extract_s,
                     cap_hit="hops",
                     final_reasoning=message("cap_hops", self.language, cap=self._max_hops),
                 )
             if pages_fetched >= self._max_pages:
-                return self._finish(
+                return finish(
                     "exhausted", None, trail, pages_fetched, hops_used, None, sub_goal, run_started=run_started, nav_link_extract_s=nav_link_extract_s,
                     cap_hit="pages",
                     final_reasoning=message("cap_pages", self.language, cap=self._max_pages),
@@ -348,7 +447,7 @@ class Navigator:
                 )
             except LLMError as exc:
                 logger.error("link selection failed: %s", exc)
-                return self._finish(
+                return finish(
                     "error", None, trail, pages_fetched, hops_used, None, sub_goal, run_started=run_started, nav_link_extract_s=nav_link_extract_s,
                     final_reasoning=message("llm_unreachable", self.language, error=exc),
                 )
@@ -382,11 +481,11 @@ class Navigator:
                 # never "resolved". It needs a page that actually loaded; if the
                 # last fetch failed there is nothing to have arrived at.
                 if selection.outcome == "arrived" and current_page is not None:
-                    return self._finish(
+                    return finish(
                         "arrived", current_page, trail, pages_fetched, hops_used, None, sub_goal, run_started=run_started, nav_link_extract_s=nav_link_extract_s,
                         final_reasoning=selection.reasoning,
                     )
-                return self._finish(
+                return finish(
                     "no_candidates", None, trail, pages_fetched, hops_used, None, sub_goal, run_started=run_started, nav_link_extract_s=nav_link_extract_s,
                     final_reasoning=selection.reasoning,
                 )
@@ -402,7 +501,7 @@ class Navigator:
             next_url = selection.url
 
         # Unreachable: the loop only exits through a return above.
-        return self._finish(
+        return finish(
             "error", None, trail, pages_fetched, hops_used, None, sub_goal,
             run_started=run_started, nav_link_extract_s=nav_link_extract_s,
             final_reasoning="Navigation ended without a decision.",

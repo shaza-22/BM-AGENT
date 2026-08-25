@@ -31,6 +31,7 @@ agent/
   llm.py             LLMClient protocol, ClaudeLLMClient, FakeLLMClient
   link_selector.py   ranking, prompt, defensive parsing, select_next_link
   navigator.py       the navigation loop -> NavigationResult
+  narrowing.py       spotting a hub that is a signpost, not the answer
   loop.py            the orchestrator: plan -> navigate each sub-goal -> answer
   planner.py         decomposing a task into sub-goals with the model
   extraction.py      reading a page with the model when keywords find nothing
@@ -381,6 +382,61 @@ default: the site is behind an F5 WAF that bans on burst traffic.
 for the validation layer. It receives the whole `PageDict` (`raw_html` for
 tables, `text` for prose, `url` for attribution) and defaults to a stub that
 never resolves, so the loop is exercisable before the real validator exists.
+
+### Stopping one hop short of the answer
+
+A category hub satisfies the validator honestly: it *is* about the topic and it
+*does* carry substance. That is a problem when the question named one family
+listed on it. "What types of debit cards do you have?" resolved on the cards
+hub, which lists every card family and details none — the run stopped one hop
+above the page that answers it.
+
+The signal that says otherwise is a set difference, not a keyword list. A
+question narrows the page it is standing on when it has a content word the
+page's own URL path does not:
+
+| question | on | left over |
+|---|---|---|
+| what types of cards do you have | `/Pages/Cards` | — |
+| what types of debit cards do you have | `/Pages/Cards` | `debit` |
+| what savings accounts do you have | `/Accounts And Deposits` | `saving` |
+| what accounts and deposits are offered | `/Accounts And Deposits` | — |
+
+When something is left over and exactly one link on the page describes it — by
+its label *or* by its URL, since Sitecore uses each and neither consistently —
+the resolve is **deferred, not discarded**: the agent fetches that page, and if
+it resolves, that wins; if it does not, the held verdict is used exactly as it
+would have been. Worst case is one extra fetch. It cannot cost an answer, and
+it cannot manufacture one — the deferred verdict is still the validator's, and
+the acceptance gate has already run on it.
+
+The deeper hop is read off the URL structure rather than chosen by the model, so
+it costs **zero extra model calls**, and one deferral per sub-goal is the cap
+(`MAX_NARROWING_DEFERRALS`). A non-resolving deeper page ends the run there
+rather than letting a detour turn a one-hop run into a full search.
+
+It abstains whenever the answer is not obvious: nothing left over, nothing
+matching, or several unrelated pages matching and none a child of this one.
+"What are the terms of the car loan?" abstains, because the site says "Auto
+Loan" and guessing across that gap is exactly what this must not do.
+
+Measured on the saved pages, seeded at the hub, with the real validator:
+
+| question | before | after |
+|---|---|---|
+| what credit cards do you have | hub, 6 entities | `/Credit Cards List`, **12 entities** |
+| what card types do you have | hub, 1 page | hub, 1 page (unchanged) |
+| what about debit card types | hub | follows `/Cards/Debit Cards Pages` |
+| what savings accounts do you have | hub | follows `/Savings Accounts/Details` |
+| what personal loans are available | hub | follows `/Pages/Personal Loan` |
+
+Only the first two are verifiable offline: `fixtures/live/` holds seven English
+pages and none of the three narrower ones, so those hops 404 against the
+snapshots and fall back to the held verdict — which is the safety property
+working, but not a demonstration that the deeper page is better. The paths are
+in `fixtures/fixture_urls.txt`; re-running `save_fixtures.py` closes the gap.
+
+`DEEPEN_ON_NARROWING = False` restores the previous behaviour in one line.
 
 ### Cost and pacing per hop
 

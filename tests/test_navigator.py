@@ -144,7 +144,9 @@ class TestResolution:
         assert result.sources == [HOME, "https://www.banquemisr.com/answer"]
 
     @needs_live
-    def test_resolves_across_three_real_pages(self):
+    def test_resolves_across_three_real_pages(self, monkeypatch):
+        # Deepening off, so this stays a test of plain selector-driven routing.
+        monkeypatch.setattr(agent_config, "DEEPEN_ON_NARROWING", False)
         navigator = Navigator(
             FakeLLMClient(choose_by("/Pages/Cards", "Credit%20Cards%20List")),
             fetcher=live_fetcher(),
@@ -158,6 +160,28 @@ class TestResolution:
         # the homepage's own Arabic switcher link is now a candidate too.
         assert [step.links_found for step in result.trail][0] == 100
         assert result.page["url"] == LIST
+
+    @needs_live
+    def test_deepening_takes_the_named_product_page_instead_of_the_list(self):
+        """The same run, with deepening on, goes one hop further and lands better.
+
+        The list page genuinely satisfies the validator -- it carries the
+        card's name -- so the old run stopped there. "classic" is a word the
+        list page's own URL does not have, and one link on it does, so the
+        resolve is deferred for the length of one fetch. No extra model call:
+        the FakeLLMClient below is scripted for two selections and would raise
+        on a third.
+        """
+        navigator = Navigator(
+            FakeLLMClient(choose_by("/Pages/Cards", "Credit%20Cards%20List")),
+            fetcher=live_fetcher(),
+            validate_fn=resolve_when("classic credit card"),
+        )
+        result = navigator.navigate("find the classic credit card")
+
+        assert result.status == "resolved"
+        assert result.hops_used == 3
+        assert result.page["url"].endswith("Classic%20Credit%20Cards")
 
 
 class TestCaps:

@@ -212,3 +212,9 @@ URL_SCHEME_PREFIXES: frozenset[str] = frozenset({"en", "home"})
 # Some links wrap a heading *and* a description; the combined text is useful
 # context for the planner but must not blow up the prompt.
 MAX_LABEL_CHARS = 180
+
+# Append the URL's own words to a link label that several links share. Eleven
+# tiles reading "View more details" are eleven links the selector can see and
+# none it can choose deliberately; the slug says which is which. Off restores
+# the raw anchor text. See _disambiguate_repeated_labels.
+DISAMBIGUATE_REPEATED_LABELS = True

@@ -16,6 +16,15 @@
 /Home/SMEs/Retail%20Banking/Consumer%20Loans
 /Home/Pages/Fees
 
+# --- Narrower pages, one hop below the hubs above --------------------------
+# Added for the narrowing-follow-up work (agent/narrowing.py): a question that
+# names one family listed on a hub now defers its resolve and looks here. The
+# rule is exercised by tests either way, but without these snapshots the
+# offline trail shows the deeper hop 404ing rather than landing.
+/Home/SMEs/Retail%20Banking/Pages/Cards/Debit%20Cards%20Pages
+/Home/SMEs/Retail%20Banking/Accounts%20And%20Deposits/Savings%20Accounts/Details
+/Home/SMEs/Retail%20Banking/Pages/Personal%20Loan
+
 # --- Arabic ---------------------------------------------------------------
 # Derived from the saved English pages, not guessed: every page links to its
 # own Arabic twin. The Arabic site is NOT a separate path tree -- it is the

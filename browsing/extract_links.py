@@ -558,8 +558,44 @@ def extract_links(
             )
         )
 
+    if config.DISAMBIGUATE_REPEATED_LABELS:
+        _disambiguate_repeated_labels(results)
+
     logger.debug("extracted %d links from %s", len(results), base_url)
     return results
+
+
+def _disambiguate_repeated_labels(links: list[LinkDict]) -> None:
+    """Give the same-text-different-destination links something to be told apart by.
+
+    Sitecore builds its category tiles from one template, so eleven different
+    destinations on the cards page all read "View more details". A label shared
+    by several links identifies none of them, and the selector picks from
+    labels -- so this is a link the model can see but cannot choose on purpose.
+
+    The fix is to append what the URL says the target is. It fires only on
+    labels that are repeated, which is the point: a repeated label distinguishes
+    nothing by construction, so adding to it cannot make it less useful. Labels
+    that already appear once are left exactly as they were.
+
+    Purely structural -- it counts occurrences and reads the path. There is no
+    list of uninformative phrases here, so it works in any language and on any
+    subject, which a "More details"/"Read more" blocklist would not.
+    """
+    counts: dict[str, int] = {}
+    for link in links:
+        folded = link["label"].casefold()
+        counts[folded] = counts.get(folded, 0) + 1
+
+    for link in links:
+        if counts[link["label"].casefold()] < 2:
+            continue
+        hint = slug_label(link["url"])
+        # Nothing to add when the slug only repeats what the label says -- the
+        # duplicated nav/footer pair for one destination, usually.
+        if not hint or hint.casefold() in link["label"].casefold():
+            continue
+        link["label"] = _cap(f"{link['label']} - {hint}")
 
 
 if __name__ == "__main__":  # pragma: no cover - manual inspection helper
