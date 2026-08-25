@@ -56,6 +56,7 @@ frontend/
 scripts/
   save_fixtures.py   one-off: snapshot live pages into fixtures/live/
   live_navigate.py   watch one sub-goal navigate (demo / smoke check)
+  narrowing_trails.py before/after trails for narrowing follow-ups (no quota)
   validator_bench.py labelled benchmark for the vendored validator
 fixtures/
   fixture_urls.txt   the pages to snapshot (data, not code)
@@ -435,6 +436,19 @@ pages and none of the three narrower ones, so those hops 404 against the
 snapshots and fall back to the held verdict — which is the safety property
 working, but not a demonstration that the deeper page is better. The paths are
 in `fixtures/fixture_urls.txt`; re-running `save_fixtures.py` closes the gap.
+
+`scripts/narrowing_trails.py` prints both trails for every case above, with
+the entity names each run came back holding, so the claim is checkable in one
+command and without spending quota:
+
+```
+BEFORE  /Pages/Cards            6 entities: Credit Card, Debit cards, Salaries Cards, ...
+AFTER   /Cards/Credit Cards List   12 entities: Classic Credit Card, Gold Credit Card,
+                                   Platinum Visa - MasterCredit Card, Titanium Credit Card, ...
+```
+
+That is the shape the fix is for: a list of *categories* becomes a list of the
+actual products in the one asked about.
 
 `DEEPEN_ON_NARROWING = False` restores the previous behaviour in one line.
 
