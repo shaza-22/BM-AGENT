@@ -101,6 +101,9 @@ def _split_sentences(text: str) -> list[str]:
 
 MIN_ANCHOR_CHARS = 4
 
+# Kept in step with agent/extraction.PLACEHOLDER; see there for the reasoning.
+_PLACEHOLDER = re.compile(r"\{\{.*?\}\}|\{%.*?%\}|\$\{.*?\}|<%.*?%>|\[\[.*?\]\]")
+
 # A label made only of digits ("3", from a Tenor column) is not a label a
 # sentence can be said to "name" -- every figure in the answer matches it, and
 # the pair rule then strikes correct sentences for not quoting its value.
@@ -259,6 +262,14 @@ def check_grounding(text: str, claims: list[dict]) -> GroundingReport:
         if not sentence:
             kept.append("")          # a blank line is layout, not a claim
             continue
+
+        # Unrendered template markup is literally on the page, so it passes
+        # every check that asks whether a value is present. It is still not a
+        # fact. See agent/extraction.py for why this is checked on every path.
+        if _PLACEHOLDER.search(sentence):
+            struck.append((sentence, "contains unrendered template markup, not page content"))
+            continue
+
         low = _norm(sentence)
 
         unquoted = [

@@ -1093,6 +1093,39 @@ of demo shortcut this project has avoided everywhere else.
 
 No `PYTHONPATH` is needed for either: see `_bootstrap.py`.
 
+## Evaluation pipeline
+
+`scripts/evaluate.py` runs the whole agent — plan, navigate from the homepage,
+validate, extract, verify, answer — against the saved pages, one case per
+requirement category, and reports pass or fail:
+
+| category | case | asserts |
+|---|---|---|
+| lookup | fees on the Classic card | claims produced, all supported, sources cited |
+| list | what card types exist | same |
+| comparison | Classic vs Gold | ≥2 sub-goals, plan from the model, then the above |
+| missing-information trap | "a joint account with my dog" | **no** claims, **no** generated prose |
+| context | a follow-up naming "the first one" | the follow-up is rewritten against turn 1, then answered |
+
+```bash
+python3 scripts/evaluate.py            # all categories
+python3 scripts/evaluate.py lookup     # one
+```
+
+Every case also runs in the test suite, so the harness cannot rot unnoticed.
+
+**What it honestly tests.** The model is a scripted stand-in, so this measures
+the *pipeline*: does a task of this shape reach a grounded answer, and does a
+question the site cannot answer come back as not-found. It cannot tell you
+whether a live model picks good links or writes good analysis.
+
+**Why the other two harnesses do not satisfy this.**
+`scripts/validator_bench.py` measures one function on 26 labelled (task, page)
+pairs — it never navigates and never reaches an answer. Person B's
+`PersonBEvaluator` loads fixtures directly and tests their layer in isolation.
+Both are useful; neither evaluates the agent, and a run can navigate perfectly
+and still answer nothing.
+
 ## Known gaps
 
 - The paths in `fixtures/fixture_urls.txt` were traced by hand and may be
@@ -1160,6 +1193,25 @@ No `PYTHONPATH` is needed for either: see `_bootstrap.py`.
 - Answer composition can be turned off with `COMPOSE_ANSWER = False`, which
   falls back to the template wording. Worth knowing before a demo: with it off
   the answer is accurate and reads like a lookup table.
-- The evaluation pipeline is still unbuilt. `scripts/validator_bench.py`
+- **The deterministic entity detector is coupled to Person B's fixture
+  wording, and this is not fixable at the root.** `extract_entities_and_lists`
+  recognises a product only by the literal line `"More Details"`,
+  `"View more details"` or `"Download"` following its name. Measured on the
+  credit-cards list fixture: with the marker, 12 entities; without it, **0**,
+  and `validate()` then reports "No relevant structured evidence found on
+  page" for a page that is nothing but a list of products.
+
+  A structural detector was prototyped — a run of three or more short
+  title-like lines — and **discarded on measurement**: it yields 69 "entities"
+  on the homepage, all navigation items, which reinstates the worst bug in this
+  system (the homepage answering every question). A run of short lines is
+  indistinguishable from a nav menu without cross-page information the
+  extractor does not have. The rescue is the extraction fallback, not a better
+  heuristic.
+
+  Other literal-string dependencies, none of which cause a false "not found":
+  `_FOOTER_START_MARKERS` and the breadcrumb list in `preprocess_cleaned_text`
+  (absence widens the body, making the topic gate more permissive), and the
+  section headings in `extract_benefits_and_sections`. `scripts/validator_bench.py`
   measures the validator in isolation and their `PersonBEvaluator` tests their
   layer offline; neither scores end-to-end navigation.

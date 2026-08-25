@@ -273,11 +273,17 @@ class Session:
 # --------------------------------------------------------------------------
 # Resolution
 # --------------------------------------------------------------------------
+# The line every resolver prompt carries, so a test double or a harness has one
+# stable string to recognise the resolving call by rather than a guess at its
+# wording.
+RESOLVER_MARKER = "Rewrite the latest request as a single self-contained instruction."
+
+
 def build_resolver_prompt(task: str, session: Session) -> str:
     lines = ["Earlier turns in this conversation:", *session.context_lines(), ""]
     lines.append(f'Latest request: "{task}"')
     lines.append("")
-    lines.append("Rewrite the latest request as a single self-contained instruction.")
+    lines.append(RESOLVER_MARKER)
     return "\n".join(lines)
 
 

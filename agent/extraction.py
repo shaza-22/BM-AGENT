@@ -125,6 +125,21 @@ _EQUIVALENT = {
 }
 _FENCE_RE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.IGNORECASE)
 
+# Unrendered template markup. The site ships Vue that never rendered --
+# "{{currencyCalculator.CashBuying}}" -- and it *is* in the page text, so the
+# verbatim check confirms it is present and a citation gets attached to a
+# variable name. Presence is not content, and this is the one shape where a
+# value can be literally on the page and still not be a fact.
+#
+# Checked here, in synthesize.py for the deterministic path, and in
+# grounding.py for anything that reaches prose. Three places on purpose: a
+# check that exists on only one path is a check the other path bypasses.
+PLACEHOLDER = re.compile(r"\{\{.*?\}\}|\{%.*?%\}|\$\{.*?\}|<%.*?%>|\[\[.*?\]\]")
+
+
+def looks_like_placeholder(text: str) -> bool:
+    return bool(PLACEHOLDER.search(text or ""))
+
 
 def normalise(text: str) -> str:
     """Fold typography and whitespace, keep everything that carries meaning."""
@@ -227,7 +242,9 @@ def verbatim_filter(facts: list[Fact], page_text: str) -> tuple[list[Fact], list
     kept: list[Fact] = []
     struck: list[tuple[str, str]] = []
     for fact in facts:
-        if occurs_verbatim(fact.value, haystack):
+        if looks_like_placeholder(fact.value) or looks_like_placeholder(fact.label):
+            struck.append((fact.label, fact.value))
+        elif occurs_verbatim(fact.value, haystack):
             kept.append(fact)
         else:
             struck.append((fact.label, fact.value))

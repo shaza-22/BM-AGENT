@@ -374,6 +374,21 @@ class ResearchLoop:
                 status_code=page.get("status"),
             )
 
+            # STAGE 1 of the answer pipeline. Logged for every page, because
+            # "the validator rejected the page" and "the validator accepted it
+            # and there was nothing on it" are different bugs that look the
+            # same from the end of the run.
+            extracted = verdict.get("extracted") or {}
+            logger.info(
+                "validate: %s -> resolved=%s status=%s | entities=%d tables=%d "
+                "sections=%d fields=%d pdf_tables=%d | %s",
+                url, verdict.get("resolved"), verdict.get("status"),
+                len(extracted.get("entities") or []), len(extracted.get("tables") or []),
+                len(extracted.get("sections") or {}), len(extracted.get("fields") or {}),
+                len(extracted.get("pdf_tables") or []),
+                str(verdict.get("reason"))[:90],
+            )
+
             decision = self._gate.judge(verdict, url, text)
             verdict["gate"] = decision.to_dict()
             if not decision.accepted:
@@ -596,22 +611,33 @@ class ResearchLoop:
 
     # -- the extraction fallback ------------------------------------------
     @staticmethod
-    def _has_usable_facts(outcome: SubGoalOutcome) -> bool:
-        """Did this sub-goal end holding any field with a value in it?"""
+    def _has_usable_facts(outcome: SubGoalOutcome, sub_goal: Any = None) -> bool:
+        """Did this sub-goal end holding anything that answers what it asked?
+
+        Fields with values always count. A bare list of product names counts
+        **only when the sub-goal asked for no particular dimension** -- for
+        "what card types do you have" the list of names is the answer, and
+        re-reading the page would spend a call to be told what is already
+        known. For "what are the fees", the same list answers nothing, which is
+        the green tick above "no verified facts were retrieved".
+        """
         if outcome.status != "resolved":
             return False
         extracted = (outcome.verdict or {}).get("extracted") or {}
-        return bool(
-            any(
-                (table.get("records") or [])
-                for table in list(extracted.get("tables") or [])
-                + list(extracted.get("pdf_tables") or [])
-            )
-            or extracted.get("fields")
+        if any(
+            (table.get("records") or [])
+            for table in list(extracted.get("tables") or [])
+            + list(extracted.get("pdf_tables") or [])
+        ) or extracted.get("fields"):
+            return True
+
+        wants_nothing_specific = list(getattr(sub_goal, "target_fields", None) or []) in (
+            [], ["overview"],
         )
+        return bool(extracted.get("entities")) and wants_nothing_specific
 
     @classmethod
-    def _needs_extraction(cls, outcome: SubGoalOutcome) -> bool:
+    def _needs_extraction(cls, outcome: SubGoalOutcome, sub_goal: Any = None) -> bool:
         """Fire whenever the sub-goal produced no usable facts. Full stop.
 
         This was a whitelist of terminal statuses, and it missed the one that
@@ -629,7 +655,7 @@ class ResearchLoop:
         Still never speculative: a resolve backed by real values returns False,
         because a second opinion there costs a call and can only agree.
         """
-        return not cls._has_usable_facts(outcome)
+        return not cls._has_usable_facts(outcome, sub_goal)
 
     def _best_page_for(self, nav: NavigationResult, collected: "_Verdicts") -> tuple[str, str]:
         """The page most worth re-reading: where navigation stopped, else the last fetched.
@@ -661,7 +687,7 @@ class ResearchLoop:
         # the loop finishing 18ms later with nothing in between.
         if not self._fallback:
             return
-        if not self._needs_extraction(outcome):
+        if not self._needs_extraction(outcome, sub_goal):
             logger.info(
                 "extraction fallback not needed for %s: the sub-goal already holds facts",
                 sub_goal.id,
@@ -864,8 +890,26 @@ class ResearchLoop:
         self._emit("synthesis_started", validated_results=len(validated),
                    visited_pages=len(self._visited))
 
+        # STAGE 3. The gap between "a sub-goal resolved" and "the answer has
+        # facts in it" lives here: only resolved and partial outcomes reach
+        # this list, and a verdict carrying nothing but product names yields
+        # exactly one claim, or none.
+        logger.info(
+            "synthesis input: %d validated verdict(s) from %d sub-goal(s) — %s",
+            len(validated), len(result.outcomes),
+            [f"{(v.get('status') or '?')}:"
+             f"ent={len((v.get('extracted') or {}).get('entities') or [])},"
+             f"tab={len((v.get('extracted') or {}).get('tables') or [])}"
+             for v in validated] or "nothing to synthesise from",
+        )
+
         synthesis = synthesize(task, plan=plan, validated_results=validated)
         claims = synthesis.get("claims", [])
+        logger.info(
+            "synthesis output: %d claim(s) from %d verdict(s)%s",
+            len(claims), len(validated),
+            "" if claims else " — the answer will say no verified facts were retrieved",
+        )
 
         # validate_answer is given exactly the pages this run fetched -- and
         # their *text*, not just their URLs. Person B's attribution accepts
@@ -877,6 +921,10 @@ class ResearchLoop:
             {"url": url, "text": self._page_text.get(url, "")} for url in self._visited
         ]
         verification = validate_answer(claims, visited_pages, strict=True)
+        logger.info(
+            "attribution: %d/%d claim(s) supported by the text of the page they cite",
+            len(verification.get("passed") or []), len(claims),
+        )
         final = finalize(synthesis, verification)
         meta = final.get("metadata", {})
 

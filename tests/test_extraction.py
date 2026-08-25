@@ -301,10 +301,31 @@ class TestItFiresOnEveryRouteToAnEmptyAnswer:
     def test_any_status_without_facts_triggers_it(self, status: str):
         assert ResearchLoop._needs_extraction(self._outcome(status)) is True
 
-    def test_a_resolve_carrying_no_field_triggers_it(self):
-        """The green tick above "No verified facts were retrieved"."""
+    def test_a_resolve_carrying_only_names_triggers_it_when_a_field_was_asked_for(self):
+        """The green tick above "No verified facts were retrieved".
+
+        A list of product names answers nothing when the sub-goal asked for
+        fees, so the page gets re-read.
+        """
         verdict = {"extracted": {"entities": [{"name": "Credit Card"}], "tables": []}}
-        assert ResearchLoop._needs_extraction(self._outcome("resolved", verdict)) is True
+
+        class _SG:
+            target_fields = ["fees"]
+
+        assert ResearchLoop._needs_extraction(self._outcome("resolved", verdict), _SG()) is True
+
+    def test_a_list_of_names_is_the_answer_when_no_field_was_asked_for(self):
+        """"What card types do you have" is answered by the names themselves.
+
+        Re-reading there spends a call to be told what is already known, and
+        this is the most common page shape on the site.
+        """
+        verdict = {"extracted": {"entities": [{"name": "Classic Credit Card"}], "tables": []}}
+
+        class _SG:
+            target_fields = ["overview"]
+
+        assert ResearchLoop._needs_extraction(self._outcome("resolved", verdict), _SG()) is False
 
     def test_a_resolve_carrying_real_values_does_not(self):
         """Never speculative: a second opinion there can only agree."""
@@ -422,3 +443,190 @@ class TestEverySkipSaysWhy:
             loop._fallback_extract(self._sub_goal(), nav, None, outcome)
         assert "firing for sg_001" in caplog.text
         assert "fees.pdf" in caplog.text and "chars" in caplog.text
+
+
+class TestTheListPageWithoutItsMarker:
+    """Traced from a live report: a list page returning "no verified facts".
+
+    The vendored entity extractor depends on the literal line "More Details"
+    following each product name. Measured on the credit-cards list fixture:
+
+        with "More Details"    -> 12 entities -> validate() resolves
+        without it             ->  0 entities -> validate() returns unresolved,
+                                  "No relevant structured evidence found on page"
+
+    So the answer went to zero at **stage 1**: not extraction finding nothing
+    after validate accepted the page, and not the loop losing facts between
+    extraction and the answer -- validate rejected the page outright, because
+    the extractor saw no entities on a page that is nothing but a list of them.
+
+    That is precisely the case the fallback exists for, and this pins that it
+    rescues it.
+    """
+
+    FIXTURE = ("fixtures/live/home-smes-retail-banking-pages-cards-"
+               "credit-cards-list.txt")
+    URL = ("https://www.banquemisr.com/Home/SMEs/Retail%20Banking/Pages/"
+           "Cards/Credit%20Cards%20List")
+
+    def _pages(self):
+        raw = (pathlib.Path(__file__).resolve().parent.parent / self.FIXTURE).read_text(
+            encoding="utf-8", errors="replace")
+        without = "\n".join(l for l in raw.splitlines() if l.strip() != "More Details")
+        return raw, without
+
+    def test_the_marker_is_what_the_extractor_depends_on(self):
+        from person_b.extraction.extractor import extract_content
+
+        raw, without = self._pages()
+        assert len(extract_content(raw, ["overview"]).extracted.get("entities") or []) >= 8
+        assert extract_content(without, ["overview"]).extracted.get("entities") == []
+
+    def test_stage_one_is_where_it_goes_to_zero(self):
+        from person_b.api import next_pending_sub_goal, plan_task, validate
+
+        _raw, without = self._pages()
+        sub_goal = next_pending_sub_goal(plan_task("what credit card types do you have"))
+        verdict = validate(sub_goal, without, source_url=self.URL)
+        assert verdict["resolved"] is False
+        assert (verdict.get("extracted") or {}).get("entities") in (None, [], {})
+
+    def test_the_fallback_rescues_exactly_this_page(self):
+        from agent.loop import SubGoalOutcome, _Verdicts
+        from person_b.api import next_pending_sub_goal, plan_task
+
+        _raw, without = self._pages()
+        page = {"url": self.URL, "text": without, "content_type": "html",
+                "status": 200, "ok": True}
+
+        def extractor(prompt: str) -> str:
+            body = prompt.split("---", 1)[1].rsplit("---", 1)[0]
+            names = [l.strip() for l in body.splitlines()
+                     if "Credit Card" in l and len(l.strip()) < 60][:5]
+            return json.dumps({"present": bool(names), "note": "",
+                               "facts": [{"label": "Card type", "value": n} for n in names]})
+
+        loop = ResearchLoop(
+            FakeLLMClient(lambda p: extractor(p) if EXTRACTION_MARKER in p else "{}"),
+            fetcher=live_fetcher(), on_event=lambda n, d: None,
+            compose=False, planning=False, fallback=True)
+        sub_goal = next_pending_sub_goal(plan_task("what credit card types do you have"))
+
+        verdict = loop._make_validate_fn(sub_goal, _Verdicts())(sub_goal.question, page)
+        assert verdict["resolved"] is False, "stage 1 should reject this page"
+
+        outcome = SubGoalOutcome(sub_goal_id=sub_goal.id, question=sub_goal.question,
+                                 status="not_available", verdict=verdict,
+                                 nav_status="arrived", source_url=self.URL)
+
+        class _Nav:
+            status, pages_fetched, trail = "arrived", 3, []
+            page = {"url": TestTheListPageWithoutItsMarker.URL, "text": without}
+
+        loop._fallback_extract(sub_goal, _Nav(), None, outcome)
+
+        assert outcome.status == "resolved", "the fallback did not rescue the page"
+        assert outcome.extraction["kept"] >= 3
+        assert any("Credit Card" in f["value"] for f in outcome.extraction["facts"])
+
+
+class TestThreePageShapes:
+    """The fallback as the general rescue, across the shapes the site has.
+
+    Deterministic matching runs first everywhere -- fast, free, and reliable
+    where it works. The fallback fires only where it found nothing. These are
+    the three shapes that matter on this site, and the flag was re-enabled on
+    the strength of them.
+    """
+
+    MULTI_TABLE = (
+        "Accounts And Deposits\n"
+        "- There are established limits on daily and monthly transactions, as well as "
+        "on account balances, as detailed below:\n"
+        "Amount | Limit\n"
+        "Equivalent to 90,000 EGP | Maximum Daily Debit Transaction Limit\n"
+        "Equivalent to 250,000 EGP | Maximum Monthly Debit Transaction Limit\n"
+        "Equivalent to 1,000,000 EGP | Maximum Account Balance\n"
+        "Currencies and Exchange Rates\n"
+        "Buying | Cash\nTransfer | {{currencyCalculator.CashBuying}}\n"
+    )
+
+    def _claims_for(self, task: str, text: str, fallback: bool = True):
+        from person_b.api import next_pending_sub_goal, plan_task, synthesize, validate_answer
+
+        from agent.loop import SubGoalOutcome, _Verdicts
+
+        url = "https://www.banquemisr.com/probe"
+        page = {"url": url, "text": text, "content_type": "html", "status": 200, "ok": True}
+
+        def extractor(prompt: str) -> str:
+            body = prompt.split("---", 1)[1].rsplit("---", 1)[0]
+            lines = [l.strip() for l in body.splitlines()
+                     if 8 < len(l.strip()) < 70 and "|" not in l][:5]
+            return json.dumps({"present": bool(lines), "note": "",
+                               "facts": [{"label": f"Item {i + 1}", "value": l}
+                                         for i, l in enumerate(lines)]})
+
+        loop = ResearchLoop(
+            FakeLLMClient(lambda p: extractor(p) if EXTRACTION_MARKER in p else "{}"),
+            fetcher=live_fetcher(), on_event=lambda n, d: None,
+            compose=False, planning=False, fallback=fallback)
+        sub_goal = next_pending_sub_goal(plan_task(task))
+        verdict = loop._make_validate_fn(sub_goal, _Verdicts())(sub_goal.question, page)
+        outcome = SubGoalOutcome(
+            sub_goal_id=sub_goal.id, question=sub_goal.question,
+            status="resolved" if verdict["resolved"] else "not_available",
+            verdict=verdict, nav_status="arrived", source_url=url)
+
+        class _Nav:
+            status, pages_fetched, trail = "arrived", 2, []
+
+        _Nav.page = page
+        loop._fallback_extract(sub_goal, _Nav(), None, outcome)
+
+        verdicts = [outcome.verdict] if outcome.status == "resolved" else []
+        synthesis = synthesize(task, validated_results=verdicts)
+        verification = validate_answer(synthesis["claims"], [{"url": url, "text": text}],
+                                       strict=True)
+        return outcome, synthesis["claims"], verification
+
+    def _page(self, stem: str, strip_marker: bool = False) -> str:
+        raw = (pathlib.Path(__file__).resolve().parent.parent / "fixtures" / "live"
+               / f"{stem}.txt").read_text(encoding="utf-8", errors="replace")
+        if strip_marker:
+            raw = "\n".join(l for l in raw.splitlines() if l.strip() != "More Details")
+        return raw
+
+    def test_shape_one_fee_table_resolves_deterministically(self):
+        """Deterministic wins here, so the fallback must not spend a call."""
+        outcome, claims, verification = self._claims_for(
+            "What are the fees on the Classic credit card?",
+            self._page("home-smes-retail-banking-pages-cards-credit-cards-pages-"
+                       "classic-credit-cards"))
+        assert outcome.status == "resolved"
+        assert outcome.extraction is None, "the fallback fired on a page that already had values"
+        assert len(claims) > 20 and len(verification["passed"]) == len(claims)
+
+    def test_shape_two_list_of_names_is_rescued_by_the_fallback(self):
+        """The traced failure: deterministic sees nothing, the model reads it."""
+        outcome, claims, verification = self._claims_for(
+            "what credit card types do you have",
+            self._page("home-smes-retail-banking-pages-cards-credit-cards-list",
+                       strip_marker=True))
+        assert outcome.extraction is not None and outcome.extraction["kept"] > 0
+        assert outcome.status == "resolved"
+        assert claims and len(verification["passed"]) == len(claims)
+
+    def test_shape_three_multi_table_reads_correctly(self):
+        """No repeated lead-in, columns the right way round, no markup."""
+        _outcome, claims, verification = self._claims_for(
+            "What are the account transaction limits?", self.MULTI_TABLE)
+        statements = [c["statement"] for c in claims]
+
+        assert len(statements) == len(set(statements)), f"repeated statements: {statements}"
+        assert not any("established limits on daily and monthly" in s for s in statements), (
+            "a sentence-length table name is being repeated in front of every row")
+        assert any(s.startswith("Maximum Daily Debit Transaction Limit") for s in statements), (
+            "the label column is still being taken by position, so rows read backwards")
+        assert not any("{{" in s for s in statements), "template markup reached a claim"
+        assert len(verification["passed"]) == len(claims)

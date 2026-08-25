@@ -321,6 +321,16 @@ MAX_PLANNED_SUB_GOALS = 3
 # bridges to "fees and charges" in a question); the value must be a literal
 # substring of the page. See that module for why.
 #
+# Re-enabled after the two bugs it was switched off for were root-caused and
+# fixed: the multi-table repetition (a sentence-length table name repeated in
+# front of every row, and the label column chosen by position rather than by
+# content) and template placeholders passing the verbatim check. Both are
+# PATCH 19 in src/person_b/PATCHES.md, and both are pinned by tests.
+#
+# Verified against three page shapes -- a fee table, a list of names whose
+# marker the deterministic extractor needs, and a multi-table limits page --
+# in tests/test_extraction.py::TestThreePageShapes.
+#
 # Set False to revert to deterministic extraction only.
 LLM_EXTRACTION_FALLBACK = True
 
